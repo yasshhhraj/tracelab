@@ -1,0 +1,1905 @@
+# Product Requirements Document  
+## Multi-Agent Differential Debugging Platform
+
+**Working name:** TraceLab  
+**Category:** Debugging + Testing  
+**Product type:** Agentic developer tool  
+**Primary differentiator:** Parallel root-cause hypothesis investigation with regression-test-based verification
+
+---
+
+# 1. Executive Summary
+
+TraceLab is a multi-agent debugging platform that receives software bugs from systems such as Jira, investigates multiple possible root causes in parallel, generates candidate fixes, and verifies each candidate using evidence rather than relying on a single agent's confidence.
+
+Most AI coding agents currently follow a largely sequential workflow:
+
+Bug → inspect code → guess root cause → patch → run tests → iterate.
+
+TraceLab instead treats debugging as a differential-diagnosis problem.
+
+For every bug, multiple investigation agents independently pursue different hypotheses. Each hypothesis is then tested in an isolated environment. A verification layer attempts to reproduce the original bug, generates a regression test, verifies that the test fails against the original code, applies the candidate fix, and ensures the same test passes afterward without breaking the existing test suite.
+
+An arbiter agent then compares the evidence behind each hypothesis and produces a diagnosis report for the engineer.
+
+The system does not autonomously merge or deploy code in the prototype. Human approval remains mandatory before a pull request is accepted.
+
+---
+
+# 2. Problem Statement
+
+AI coding agents have become increasingly capable of reading tickets, modifying repositories, running tests, and opening pull requests.
+
+However, debugging remains difficult because agents frequently commit too early to one suspected root cause.
+
+A typical workflow is:
+
+```text
+Bug
+ ↓
+Inspect code
+ ↓
+Assume cause
+ ↓
+Patch
+ ↓
+Tests green
+ ↓
+Declare fixed
+```
+
+This has three major weaknesses.
+
+First, multiple root causes may plausibly explain the same symptom.
+
+Second, passing the existing test suite does not prove that the reported bug has actually been fixed.
+
+Third, sequential trial-and-error can waste time by pursuing an incorrect hypothesis before considering alternatives.
+
+Complex problems such as race conditions, intermittent failures, cross-module behavior, incorrect caching, transaction issues, configuration problems, or regressions introduced by recent changes are particularly difficult.
+
+The product therefore addresses the following problem:
+
+> Software debugging agents need a systematic way to explore competing root-cause hypotheses and prove that a proposed fix addresses the actual reported failure.
+
+---
+
+# 3. Proposed Solution
+
+TraceLab introduces a multi-agent debugging workflow where several agents investigate the same bug independently from different perspectives.
+
+The system:
+
+1. retrieves a bug from Jira;
+2. extracts symptoms and available evidence;
+3. identifies relevant repository context;
+4. launches multiple investigation agents in parallel;
+5. requires each agent to propose a distinct root-cause hypothesis;
+6. generates or identifies a reproducible test for each hypothesis;
+7. applies candidate fixes in isolated worktrees or sandboxes;
+8. validates each candidate;
+9. compares evidence;
+10. produces a diagnosis report;
+11. requests human approval;
+12. optionally creates a pull request and updates Jira.
+
+The main principle is:
+
+> Do not select the most convincing explanation. Select the explanation with the strongest reproducible evidence.
+
+---
+
+# 4. Product Vision
+
+Create an AI debugging system engineers can trust because every proposed fix is accompanied by:
+
+- a reproducible failure;
+- an explicit root-cause hypothesis;
+- a regression test;
+- before-and-after test evidence;
+- competing hypotheses considered and rejected;
+- a transparent diagnosis report.
+
+The long-term goal is not to create another autonomous coding agent.
+
+The goal is to create an **evidence-driven debugging engine** that can be integrated with existing developer agents, IDEs, CI systems, issue trackers, and repositories.
+
+---
+
+# 5. Core Product Principle
+
+The product should follow:
+
+```text
+Hypothesis → Experiment → Evidence → Decision
+```
+
+rather than:
+
+```text
+Guess → Patch → Hope
+```
+
+---
+
+# 6. Target Users
+
+Primary users:
+
+- software engineers;
+- backend developers;
+- QA engineers;
+- DevOps engineers;
+- maintainers of large repositories;
+- engineering teams handling large bug queues.
+
+Secondary users:
+
+- engineering managers;
+- SRE teams;
+- platform engineering teams;
+- open-source maintainers.
+
+---
+
+# 7. Jobs To Be Done
+
+### Engineer
+
+"When I receive a bug that has multiple possible causes, help me investigate several explanations without manually tracing each one."
+
+### QA Engineer
+
+"When a bug is fixed, prove that the fix addresses the actual reported behavior and isn't simply passing unrelated tests."
+
+### Team Lead
+
+"When an AI proposes a fix, show me evidence explaining why the proposed diagnosis is stronger than the alternatives."
+
+### Maintainer
+
+"When bugs arrive through Jira, automatically perform the expensive investigation work before requiring human review."
+
+---
+
+# 8. Core Workflow
+
+```text
+                   Jira Bug
+                      │
+                      ▼
+                Intake Agent
+                      │
+              Context Extraction
+                      │
+          ┌───────────┼───────────┐
+          ▼           ▼           ▼
+      Code Path    Git History   Test Analysis
+        Agent         Agent         Agent
+          │           │           │
+          ▼           ▼           ▼
+     Hypothesis A Hypothesis B Hypothesis C
+          │           │           │
+          └───────┬───┴───────┬───┘
+                  │
+                  ▼
+            Verification Layer
+                  │
+         reproduce original bug
+                  │
+         generate regression test
+                  │
+        test against original code
+                  │
+                  ▼
+               MUST FAIL
+                  │
+            apply candidate fix
+                  │
+                  ▼
+               MUST PASS
+                  │
+        run existing regression suite
+                  │
+                  ▼
+             Arbiter Agent
+                  │
+                  ▼
+            Diagnosis Report
+                  │
+                  ▼
+             Human Review
+                  │
+          ┌───────┴────────┐
+          ▼                ▼
+       Approve           Reject
+          │
+          ▼
+       Create PR
+          │
+          ▼
+       Update Jira
+```
+
+---
+
+# 9. Core Agents
+
+## 9.1 Intake Agent
+
+Purpose:
+
+Understand the bug before allowing any agent to modify code.
+
+Inputs:
+
+- Jira title;
+- Jira description;
+- acceptance criteria;
+- stack trace;
+- logs;
+- attachments if supported;
+- linked documents;
+- repository metadata.
+
+Responsibilities:
+
+- extract reported symptom;
+- identify expected behavior;
+- identify actual behavior;
+- identify suspected component;
+- determine whether sufficient information exists;
+- produce normalized BugContext.
+
+Output example:
+
+```json
+{
+  "issueId": "PVS-421",
+  "symptom": "Duplicate ReviewRun records are occasionally created",
+  "expected": "Identical repeated requests should return one persisted run",
+  "actual": "Two rows may be created under concurrent requests",
+  "affectedArea": "review persistence",
+  "errorType": "intermittent",
+  "knownEvidence": [
+    "same input hash",
+    "duplicate rows",
+    "concurrent calls"
+  ]
+}
+```
+
+---
+
+# 10. Investigation Agents
+
+The prototype should use three parallel strategies.
+
+## 10.1 Code-Path Agent
+
+Investigates execution flow.
+
+Responsibilities:
+
+- locate relevant APIs;
+- trace function calls;
+- inspect persistence logic;
+- inspect exception paths;
+- inspect concurrency boundaries;
+- identify suspicious implementation behavior.
+
+Typical hypothesis:
+
+> The idempotency check executes separately from the database insert, allowing two requests to pass the check simultaneously.
+
+---
+
+## 10.2 Git-History Agent
+
+Investigates repository history.
+
+Responsibilities:
+
+- inspect recent commits affecting the relevant code;
+- use git blame;
+- compare previous versions;
+- identify changes correlated with the bug;
+- inspect related fixes or regressions.
+
+Typical hypothesis:
+
+> A recent refactor moved the uniqueness check outside the transaction.
+
+---
+
+## 10.3 Test-Behavior Agent
+
+Investigates current test coverage.
+
+Responsibilities:
+
+- locate existing tests;
+- identify missing edge-case coverage;
+- run relevant tests;
+- vary parameters;
+- inspect concurrency/timing assumptions;
+- attempt reproduction.
+
+Typical hypothesis:
+
+> Existing tests only execute sequential requests, so concurrent duplicate creation has never been tested.
+
+---
+
+# 11. Hypothesis Model
+
+Every investigation agent must produce structured output.
+
+```json
+{
+  "hypothesisId": "H-002",
+  "summary": "Race condition between idempotency check and insert",
+  "suspectedFiles": [
+    "review_service.py",
+    "review_repository.py"
+  ],
+  "reasoningSummary": "Two concurrent requests can observe no existing run before either transaction commits.",
+  "reproductionPlan": [
+    "Send two identical requests concurrently",
+    "Verify both use the same input_hash",
+    "Count resulting ReviewRun rows"
+  ],
+  "candidateFix": "Enforce uniqueness at database level and handle conflict.",
+  "confidence": "medium"
+}
+```
+
+The confidence field is informational only.
+
+The arbiter must not choose winners based primarily on model confidence.
+
+---
+
+# 12. Verification Engine
+
+Verification is the most important part of the product.
+
+Each hypothesis receives an isolated execution environment.
+
+Possible implementation:
+
+```text
+main repository
+
+   ├── worktree-H1
+   ├── worktree-H2
+   └── worktree-H3
+```
+
+Each hypothesis should undergo:
+
+### Step 1 — Reproduction
+
+Attempt to reproduce the reported bug against the original code.
+
+### Step 2 — Regression test
+
+Generate or modify a test that captures the bug.
+
+### Step 3 — Pre-fix validation
+
+Run the regression test against original code.
+
+Expected:
+
+```text
+FAIL
+```
+
+If it passes before the fix, it does not prove the bug.
+
+### Step 4 — Candidate patch
+
+Apply the hypothesis-specific fix.
+
+### Step 5 — Post-fix validation
+
+Run the regression test again.
+
+Expected:
+
+```text
+PASS
+```
+
+### Step 6 — Existing suite
+
+Run relevant existing tests.
+
+Expected:
+
+```text
+PASS
+```
+
+### Step 7 — Optional broader suite
+
+If runtime allows, run the full repository suite.
+
+---
+
+# 13. Verification Contract
+
+A hypothesis can be considered VERIFIED only when:
+
+```text
+reproduction = successful
+
+AND
+
+regression_test_before_fix = FAIL
+
+AND
+
+regression_test_after_fix = PASS
+
+AND
+
+relevant_existing_tests = PASS
+```
+
+A hypothesis may be:
+
+- VERIFIED;
+- REJECTED;
+- INCONCLUSIVE;
+- BLOCKED.
+
+---
+
+# 14. Flaky Bug Verification
+
+Intermittent bugs require a different verification strategy.
+
+For a flaky failure, TraceLab should run repeated experiments.
+
+Example:
+
+```text
+Original code
+
+100 runs
+23 failures
+
+Candidate fix
+
+100 runs
+0 failures
+```
+
+Configuration:
+
+```text
+minimumRuns = 20
+defaultRuns = 50
+maximumRuns = 100
+```
+
+Result:
+
+```json
+{
+  "before": {
+    "runs": 50,
+    "failures": 11,
+    "failureRate": 0.22
+  },
+  "after": {
+    "runs": 50,
+    "failures": 0,
+    "failureRate": 0
+  }
+}
+```
+
+The system should not claim a flaky problem is solved after a single successful execution.
+
+---
+
+# 15. Arbiter Agent
+
+The arbiter evaluates evidence produced by verification.
+
+It receives:
+
+- hypotheses;
+- reproduction results;
+- patches;
+- regression tests;
+- test logs;
+- changed files;
+- existing suite results.
+
+The arbiter should prefer:
+
+1. successful reproduction;
+2. clear causal explanation;
+3. fail-before/pass-after regression evidence;
+4. minimal implementation change;
+5. low regression risk;
+6. successful existing test suite.
+
+It should not simply choose the agent reporting the highest confidence.
+
+---
+
+# 16. Diagnosis Report
+
+Example:
+
+```text
+Issue: PVS-421
+
+Reported symptom:
+Duplicate review runs occasionally appear for the same request.
+
+Verified root cause:
+Race condition between idempotency lookup and persistence.
+
+Evidence:
+✓ Bug reproduced with concurrent requests
+✓ Regression test fails against original code
+✓ Regression test passes after candidate patch
+✓ 183 relevant existing tests pass
+
+Winning hypothesis:
+H-002
+
+Rejected hypotheses:
+
+H-001 — stale cache
+Could not reproduce behavior through cache invalidation.
+
+H-003 — malformed input hashing
+Identical concurrent requests produced the same hash correctly.
+
+Changed files:
+- review_repository.py
+- test_review_idempotency.py
+
+Risk:
+Low
+
+Recommended action:
+Review candidate patch and create PR.
+```
+
+---
+
+# 17. Human-in-the-Loop
+
+The prototype must not merge directly into protected branches.
+
+Workflow:
+
+```text
+AI investigation
+      ↓
+AI verification
+      ↓
+Diagnosis report
+      ↓
+Human approval
+      ↓
+PR creation
+```
+
+Human actions:
+
+- approve candidate;
+- reject candidate;
+- inspect diff;
+- request another investigation;
+- select alternative hypothesis;
+- stop execution.
+
+---
+
+# 18. Jira Integration
+
+Jira serves as the external task queue.
+
+The product should retrieve bugs through Jira MCP or Jira API.
+
+Possible trigger:
+
+```text
+status = "Ready for AI Debugging"
+AND
+issuetype = Bug
+```
+
+The agent should retrieve:
+
+- issue title;
+- description;
+- comments;
+- attachments when available;
+- linked issues;
+- priority;
+- affected component.
+
+---
+
+# 19. Jira State Model
+
+Suggested workflow:
+
+```text
+READY_FOR_AI
+     ↓
+AI_ANALYZING
+     ↓
+AI_INVESTIGATING
+     ↓
+AI_VERIFYING
+     ↓
+AI_REVIEW_READY
+     ↓
+AWAITING_HUMAN
+     ↓
+PR_CREATED
+```
+
+Failure states:
+
+```text
+AI_BLOCKED
+AI_FAILED
+NEEDS_MORE_CONTEXT
+```
+
+The prototype does not require custom Jira workflow statuses if modifying Jira configuration is inconvenient.
+
+Labels or comments may be used instead.
+
+---
+
+# 20. Jira Update
+
+When analysis completes, the agent can add:
+
+```text
+AI Debugging Analysis Complete
+
+3 root-cause hypotheses investigated.
+
+Verified:
+Race condition between idempotency lookup and insert.
+
+Evidence:
+- reproduced with concurrent requests
+- regression test fails on current code
+- passes after patch
+- relevant suite: 183/183 passed
+
+Candidate PR:
+#412
+
+Human review required.
+```
+
+---
+
+# 21. Git Integration
+
+Required Git operations:
+
+- clone/open repository;
+- checkout issue base commit;
+- create isolated worktree;
+- search repository;
+- inspect history;
+- create branch;
+- apply patch;
+- generate tests;
+- run diff;
+- create commit;
+- optionally push branch.
+
+Recommended branch format:
+
+```text
+ai-debug/PVS-421-h2
+```
+
+---
+
+# 22. GitHub Integration
+
+Optional for first prototype but ideal for demo.
+
+Capabilities:
+
+- create branch;
+- push commits;
+- open draft pull request;
+- attach diagnosis report;
+- retrieve CI status.
+
+Suggested PR template:
+
+```text
+Fix PVS-421: prevent duplicate ReviewRun creation
+
+AI-assisted diagnosis
+
+Verified cause:
+Race condition between existence check and insert.
+
+Verification:
+- regression test fails before patch
+- regression test passes after patch
+- 183 existing tests pass
+
+Alternative hypotheses investigated:
+- stale cache — rejected
+- inconsistent hash — rejected
+
+Human review required before merge.
+```
+
+---
+
+# 23. Product Dashboard
+
+The application should show active investigations.
+
+Example:
+
+```text
+PVS-421
+Duplicate ReviewRuns
+
+Status: VERIFYING
+
+Hypotheses
+
+H1 Cache inconsistency
+REJECTED
+
+H2 Idempotency race condition
+VERIFIED
+
+H3 Hash collision
+TESTING
+```
+
+---
+
+# 24. Investigation Detail Page
+
+Route:
+
+```text
+/investigations/:id
+```
+
+Sections:
+
+### Ticket context
+
+- Jira issue;
+- title;
+- description;
+- repository;
+- target branch.
+
+### Hypothesis timeline
+
+Shows each agent working independently.
+
+### Evidence
+
+- commands executed;
+- files inspected;
+- relevant snippets;
+- test results.
+
+### Patches
+
+Diff viewer for each candidate.
+
+### Verification
+
+Fail-before/pass-after comparison.
+
+### Decision
+
+Arbiter diagnosis.
+
+---
+
+# 25. Hero Demo
+
+The hackathon demo should intentionally use a bug with multiple plausible explanations.
+
+Recommended example:
+
+> Duplicate database entries appear when two identical requests arrive simultaneously.
+
+Plausible causes:
+
+```text
+Agent A
+Cache / stale-read issue
+
+Agent B
+Transaction / idempotency race
+
+Agent C
+Incorrect input hashing
+```
+
+Expected outcome:
+
+```text
+Agent A
+Reproduction failed
+REJECTED
+
+Agent B
+Reproduction successful
+Regression test:
+original → FAIL
+patched → PASS
+VERIFIED
+
+Agent C
+Input hashes match correctly
+REJECTED
+```
+
+This makes the parallel investigation visibly meaningful.
+
+---
+
+# 26. MVP Scope
+
+## Must Have
+
+- Jira bug intake;
+- repository access;
+- normalized BugContext;
+- three parallel investigation agents;
+- isolated Git worktrees;
+- structured hypotheses;
+- reproduction attempts;
+- regression-test generation;
+- fail-before/pass-after validation;
+- existing test execution;
+- arbiter agent;
+- diagnosis report;
+- human approval screen.
+
+## Strongly Recommended
+
+- GitHub draft PR generation;
+- Jira comment/update;
+- execution timeline;
+- basic token/runtime telemetry.
+
+## Not Required for MVP
+
+- autonomous merge;
+- autonomous deployment;
+- production log ingestion;
+- Slack integration;
+- Confluence ingestion;
+- dozens of specialized agents;
+- multi-repository debugging;
+- automated rollback;
+- reinforcement learning;
+- custom model training.
+
+---
+
+# 27. Architecture
+
+Recommended prototype architecture:
+
+```text
+                     Jira MCP
+                        │
+                        ▼
+                ┌───────────────┐
+                │ Orchestrator  │
+                └───────┬───────┘
+                        │
+                   Bug Context
+                        │
+        ┌───────────────┼───────────────┐
+        ▼               ▼               ▼
+    Code Agent      Git Agent       Test Agent
+        │               │               │
+        └──────┬────────┴───────┬───────┘
+               ▼                ▼
+         Hypothesis Store
+               │
+               ▼
+        Verification Engine
+               │
+        ┌──────┼──────┐
+        ▼      ▼      ▼
+      H1 WT   H2 WT   H3 WT
+        │      │       │
+        └──────┼───────┘
+               ▼
+           Arbiter
+               │
+               ▼
+       Diagnosis Report
+               │
+               ▼
+        Human Approval
+               │
+          ┌────┴────┐
+          ▼         ▼
+       GitHub      Jira
+```
+
+---
+
+# 28. Recommended Technology Stack
+
+## Orchestrator
+
+Python.
+
+Reasons:
+
+- strong subprocess/process management;
+- mature AI SDK support;
+- straightforward Git automation;
+- good concurrency primitives;
+- good test-runner integration.
+
+Recommended:
+
+```text
+Python 3.12+
+FastAPI
+Pydantic
+asyncio
+```
+
+---
+
+## Agent Layer
+
+Any model provider that supports:
+
+- tool calling;
+- structured output;
+- strong code reasoning;
+- long context.
+
+Keep model integration behind an abstraction:
+
+```python
+class AgentModel:
+    async def run(
+        self,
+        context: AgentContext,
+        tools: list[Tool],
+    ) -> AgentResult:
+        ...
+```
+
+---
+
+# 29. Agent Orchestration
+
+Prototype orchestration can initially be implemented directly with Python and `asyncio`.
+
+Example:
+
+```python
+results = await asyncio.gather(
+    code_path_agent.run(context),
+    git_history_agent.run(context),
+    test_agent.run(context),
+)
+```
+
+Do not introduce a large workflow framework unless necessary.
+
+A state-machine abstraction can be added later.
+
+---
+
+# 30. State Model
+
+Core investigation status:
+
+```text
+CREATED
+CONTEXT_LOADING
+INVESTIGATING
+VERIFYING
+ARBITRATING
+WAITING_FOR_REVIEW
+APPROVED
+REJECTED
+FAILED
+BLOCKED
+```
+
+Hypothesis state:
+
+```text
+PROPOSED
+REPRODUCING
+PATCHING
+VERIFYING
+VERIFIED
+REJECTED
+INCONCLUSIVE
+BLOCKED
+```
+
+---
+
+# 31. Core Data Entities
+
+## Investigation
+
+```text
+id
+external_issue_id
+repository
+base_branch
+status
+bug_context
+created_at
+updated_at
+completed_at
+```
+
+## Hypothesis
+
+```text
+id
+investigation_id
+agent_type
+summary
+reasoning_summary
+candidate_fix
+status
+confidence
+created_at
+```
+
+## Experiment
+
+```text
+id
+hypothesis_id
+command
+working_directory
+exit_code
+stdout
+stderr
+duration_ms
+created_at
+```
+
+## TestEvidence
+
+```text
+id
+hypothesis_id
+test_path
+pre_fix_result
+post_fix_result
+existing_suite_result
+runs
+failures_before
+failures_after
+```
+
+## Patch
+
+```text
+id
+hypothesis_id
+branch
+commit_sha
+diff
+files_changed
+```
+
+## Diagnosis
+
+```text
+id
+investigation_id
+selected_hypothesis_id
+summary
+evidence
+risk
+created_at
+```
+
+---
+
+# 32. Minimal Database
+
+Use PostgreSQL for persistent state.
+
+For a hackathon prototype, SQLite is also acceptable if deployment simplicity matters.
+
+Suggested tables:
+
+```text
+investigations
+hypotheses
+experiments
+test_evidence
+patches
+diagnoses
+agent_events
+```
+
+---
+
+# 33. API Design
+
+## Start investigation
+
+```http
+POST /api/investigations
+```
+
+Request:
+
+```json
+{
+  "jiraIssueId": "PVS-421",
+  "repository": "github.com/org/repo",
+  "baseBranch": "main"
+}
+```
+
+Response:
+
+```json
+{
+  "id": "inv_123",
+  "status": "CREATED"
+}
+```
+
+---
+
+## Get investigation
+
+```http
+GET /api/investigations/{id}
+```
+
+---
+
+## Get hypotheses
+
+```http
+GET /api/investigations/{id}/hypotheses
+```
+
+---
+
+## Get evidence
+
+```http
+GET /api/hypotheses/{id}/evidence
+```
+
+---
+
+## Approve fix
+
+```http
+POST /api/investigations/{id}/approve
+```
+
+---
+
+## Reject fix
+
+```http
+POST /api/investigations/{id}/reject
+```
+
+---
+
+## Create PR
+
+```http
+POST /api/investigations/{id}/pull-request
+```
+
+Only permitted after approval.
+
+---
+
+# 34. Tool Layer
+
+Agents should interact with the environment through controlled tools.
+
+Examples:
+
+```text
+search_code
+read_file
+git_log
+git_blame
+git_diff
+run_command
+run_test
+create_worktree
+apply_patch
+write_test
+```
+
+Agents should not receive unrestricted shell access by default.
+
+---
+
+# 35. Command Safety
+
+Commands should run inside an isolated repository workspace.
+
+Block dangerous commands such as:
+
+```text
+rm -rf /
+sudo
+curl ... | sh
+docker system prune
+shutdown
+```
+
+Prefer allowlisted commands during the prototype:
+
+```text
+git
+pytest
+npm test
+pnpm test
+mvn test
+gradle test
+```
+
+---
+
+# 36. Resource Controls
+
+Every investigation must have limits.
+
+Example:
+
+```text
+maximum hypotheses: 3
+maximum investigation time: configurable
+maximum patch attempts per hypothesis: 2
+maximum command runtime: 120 seconds
+maximum flaky-test runs: 100
+```
+
+Prevent uncontrolled agent loops.
+
+---
+
+# 37. Observability
+
+Every agent action should generate an event.
+
+Example:
+
+```json
+{
+  "agent": "git-history",
+  "action": "git_log",
+  "target": "review_service.py",
+  "timestamp": "..."
+}
+```
+
+Dashboard timeline:
+
+```text
+14:02 Jira issue loaded
+14:03 Context normalized
+14:03 3 investigation agents started
+
+14:04 Code agent inspected ReviewService
+14:04 Git agent found recent persistence refactor
+14:05 Test agent reproduced duplicate creation
+
+14:07 H1 rejected
+14:09 H2 patch generated
+14:10 Regression test failed against original
+14:11 Regression test passed with H2
+14:12 Existing tests 183/183 passed
+
+14:13 H2 verified
+14:14 Diagnosis ready
+```
+
+---
+
+# 38. Success Metrics
+
+Primary prototype metrics:
+
+### Verified Resolution Rate
+
+Percentage of bugs where:
+
+```text
+reproduction succeeded
++
+regression proof succeeded
++
+existing tests remained green
+```
+
+### Time to Verified Diagnosis
+
+From:
+
+```text
+investigation started
+```
+
+to:
+
+```text
+verified hypothesis identified
+```
+
+### Hypothesis Coverage
+
+How many distinct plausible causes were evaluated.
+
+### Regression-Proof Rate
+
+Percentage of fixes where the generated test:
+
+```text
+fails before
+AND
+passes after
+```
+
+### Human Acceptance Rate
+
+Percentage of proposed fixes approved by a reviewer.
+
+---
+
+# 39. Experimental Evaluation
+
+Build a small seeded benchmark.
+
+Recommended:
+
+```text
+10 bugs
+```
+
+Categories:
+
+```text
+3 logic bugs
+2 data/persistence bugs
+2 concurrency bugs
+2 regression bugs
+1 flaky bug
+```
+
+Compare:
+
+### Baseline
+
+One sequential coding agent.
+
+### TraceLab
+
+Three parallel investigation agents + verifier + arbiter.
+
+Measure:
+
+```text
+correct diagnosis
+verified fix
+time to diagnosis
+number of failed attempts
+regression test quality
+```
+
+This gives the hackathon pitch measurable evidence rather than only a demo.
+
+---
+
+# 40. UX Principle
+
+The system must make agent activity understandable.
+
+Do not show:
+
+```text
+AI confidence: 93%
+```
+
+as the primary evidence.
+
+Show:
+
+```text
+Reproduced?
+YES
+
+Failed before patch?
+YES
+
+Passed after patch?
+YES
+
+Existing tests?
+183 / 183
+
+Competing hypotheses checked?
+3
+```
+
+---
+
+# 41. Failure Handling
+
+## Unable to reproduce
+
+Status:
+
+```text
+INCONCLUSIVE
+```
+
+The system should identify missing information.
+
+Example:
+
+```text
+Unable to reproduce.
+
+Needed:
+- production request payload
+- database isolation level
+- timing between the two requests
+```
+
+---
+
+## Insufficient context
+
+Status:
+
+```text
+NEEDS_MORE_CONTEXT
+```
+
+The Jira ticket can receive a clarification comment.
+
+---
+
+## All hypotheses fail
+
+Do not fabricate a diagnosis.
+
+Return:
+
+```text
+No hypothesis was sufficiently supported by evidence.
+```
+
+---
+
+## Tests cannot run
+
+Mark:
+
+```text
+BLOCKED
+```
+
+Include environment problem.
+
+---
+
+# 42. Non-Goals
+
+The prototype is not intended to:
+
+- replace engineers;
+- autonomously deploy code;
+- merge directly into production branches;
+- fix every category of software defect;
+- infer production failures without sufficient evidence;
+- replace CI;
+- replace code review.
+
+---
+
+# 43. Security Requirements
+
+- repository credentials must never appear in prompts;
+- API tokens must remain server-side;
+- agents must operate in isolated workspaces;
+- destructive commands should be blocked;
+- logs should redact credentials;
+- Jira authorization must respect existing user/service permissions;
+- pull requests require human approval.
+
+---
+
+# 44. Product Differentiation
+
+The product should not be pitched as:
+
+> AI that reads Jira tickets and writes code.
+
+That capability already exists in several developer-agent products.
+
+The product should instead be pitched as:
+
+> AI that systematically investigates competing explanations for a bug and proves which fix addresses the actual failure.
+
+The meaningful differentiators are:
+
+### Parallel hypotheses
+
+Multiple root causes are explored simultaneously.
+
+### Evidence-based selection
+
+The winner is chosen using execution evidence.
+
+### Regression proof
+
+The fix must demonstrate:
+
+```text
+FAIL before
+PASS after
+```
+
+### Alternative-hypothesis rejection
+
+Users see what else was investigated.
+
+### Human-understandable diagnosis
+
+The output is a debugging report, not merely a diff.
+
+---
+
+# 45. Prototype Build Order
+
+## Phase 1 — Local Debugging Engine
+
+Build:
+
+- repository loader;
+- Git helper;
+- test runner;
+- worktree manager;
+- command execution layer.
+
+Acceptance:
+
+A local CLI can checkout a repository, create three worktrees, and run tests independently.
+
+---
+
+## Phase 2 — Single Investigation Agent
+
+Build:
+
+- bug context schema;
+- code search tools;
+- agent interface;
+- structured hypothesis output.
+
+Acceptance:
+
+Given a bug description, one agent can produce a structured root-cause hypothesis.
+
+---
+
+## Phase 3 — Parallel Investigation
+
+Add:
+
+- code-path agent;
+- git-history agent;
+- test-analysis agent.
+
+Run using async concurrency.
+
+Acceptance:
+
+Three agents independently produce hypotheses for one bug.
+
+---
+
+## Phase 4 — Verification Engine
+
+Implement:
+
+- reproduction;
+- generated regression tests;
+- original-code execution;
+- patched-code execution;
+- existing-suite execution.
+
+Acceptance:
+
+System can demonstrate:
+
+```text
+original = FAIL
+candidate = PASS
+```
+
+---
+
+## Phase 5 — Arbiter
+
+Build evidence-comparison agent.
+
+Acceptance:
+
+Arbiter receives all candidate results and outputs a structured diagnosis.
+
+---
+
+## Phase 6 — Dashboard
+
+Build:
+
+```text
+/investigations
+/investigations/:id
+```
+
+Display:
+
+- agent status;
+- hypotheses;
+- test evidence;
+- diff;
+- diagnosis.
+
+---
+
+## Phase 7 — Jira MCP
+
+Add Jira intake.
+
+Acceptance:
+
+A selected Jira bug can launch an investigation.
+
+---
+
+## Phase 8 — GitHub PR
+
+Add draft PR creation.
+
+Acceptance:
+
+After human approval, candidate patch can become a draft pull request.
+
+---
+
+## Phase 9 — Jira Feedback
+
+Write diagnosis and PR reference back to Jira.
+
+---
+
+# 46. Ideal Demo Flow
+
+Start with Jira:
+
+```text
+BUG-142
+Duplicate orders sometimes created when users retry checkout.
+```
+
+Press:
+
+```text
+Investigate
+```
+
+Dashboard immediately shows:
+
+```text
+Launching 3 investigators...
+```
+
+Then:
+
+```text
+Code Path
+Investigating transaction flow...
+
+Git History
+Examining recent checkout changes...
+
+Test Analysis
+Attempting concurrent request reproduction...
+```
+
+Results arrive independently.
+
+```text
+H1 — cache issue
+REJECTED
+
+H2 — idempotency race
+VERIFIED
+
+H3 — malformed retry key
+REJECTED
+```
+
+Open H2:
+
+```text
+Regression proof
+
+Original:
+FAIL — duplicate order count = 2
+
+Candidate:
+PASS — duplicate order count = 1
+
+Existing suite:
+214 / 214 passed
+```
+
+Then display the diagnosis.
+
+Human clicks:
+
+```text
+Approve & Create Draft PR
+```
+
+Jira receives the result.
+
+This is the entire demo story.
+
+---
+
+# 47. Acceptance Criteria
+
+The hackathon prototype is complete when:
+
+- a Jira bug can be imported;
+- the system launches at least three independent investigation agents;
+- each returns a distinct hypothesis;
+- agents run concurrently;
+- each hypothesis can be independently tested;
+- at least one seeded bug can be reproduced;
+- a regression test fails against the original implementation;
+- the same regression test passes against the candidate fix;
+- existing tests remain green;
+- competing hypotheses are visibly rejected;
+- an arbiter creates a diagnosis report;
+- a user can inspect the evidence;
+- human approval is required;
+- a draft PR can be generated or convincingly demonstrated.
+
+---
+
+# 48. Future Scope
+
+After the prototype:
+
+### More context sources
+
+- Confluence;
+- Slack;
+- production logs;
+- Sentry;
+- Datadog;
+- New Relic;
+- OpenTelemetry traces.
+
+### Specialized investigators
+
+- concurrency agent;
+- database agent;
+- dependency agent;
+- security agent;
+- performance agent;
+- distributed tracing agent.
+
+### Cross-service debugging
+
+Example:
+
+```text
+frontend
+  ↓
+API gateway
+  ↓
+service A
+  ↓
+Kafka
+  ↓
+service B
+  ↓
+database
+```
+
+Agents could independently inspect each service.
+
+### Historical learning
+
+Store resolved bug patterns and retrieve similar incidents before launching new investigations.
+
+### CI integration
+
+Automatically investigate failed CI builds.
+
+### IDE integration
+
+Allow engineers to launch differential debugging directly from their IDE.
+
+---
+
+# 49. Final Product Statement
+
+TraceLab is an evidence-driven multi-agent debugging platform that investigates several root-cause hypotheses simultaneously, validates candidate fixes through reproducible regression tests, and presents engineers with a transparent diagnosis before any code is merged.
+
+Its core workflow is:
+
+```text
+Bug
+ ↓
+Understand
+ ↓
+Generate competing hypotheses
+ ↓
+Investigate in parallel
+ ↓
+Reproduce
+ ↓
+Patch independently
+ ↓
+FAIL before / PASS after
+ ↓
+Compare evidence
+ ↓
+Human-reviewed diagnosis
+ ↓
+PR
+```
+
+The central innovation is not autonomous code generation.
+
+It is **turning AI debugging from sequential guessing into parallel, testable scientific investigation.**
