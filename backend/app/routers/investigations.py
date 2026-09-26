@@ -23,7 +23,9 @@ import logging
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from app.config import settings
 from app.db.models import Hypothesis as HypothesisORM
 from app.db.models import Investigation as InvestigationORM
 from app.db.models import InvestigationStatus
@@ -33,6 +35,7 @@ from app.schemas.bug_context import BugContext
 from app.schemas.investigation import (
     HypothesisResponse,
     InvestigationCreate,
+    InvestigationDetailResponse,
     InvestigationListResponse,
     InvestigationResponse,
 )
@@ -58,6 +61,10 @@ async def create_investigation(
     background task.  Returns the investigation in CREATED state without
     waiting for agents to complete.
     """
+    repository = body.repository or settings.target_repository
+    if not repository:
+        raise HTTPException(status_code=422, detail="Repository is required")
+
     bug_context = BugContext(
         issue_id=body.jira_issue_id,
         symptom=body.symptom,
@@ -67,13 +74,13 @@ async def create_investigation(
         error_type=body.error_type,
         known_evidence=body.known_evidence,
         stack_trace=body.stack_trace,
-        repository=body.repository,
+        repository=repository,
         base_branch=body.base_branch,
     )
 
     investigation = InvestigationORM(
         external_issue_id=body.jira_issue_id,
-        repository=body.repository,
+        repository=repository,
         base_branch=body.base_branch,
         status=InvestigationStatus.CREATED,
         bug_context=bug_context.model_dump(),
@@ -115,16 +122,20 @@ async def list_investigations(
 # ── GET /api/investigations/{id} ──────────────────────────────────────────────
 
 
-@router.get("/{investigation_id}", response_model=InvestigationResponse)
+@router.get("/{investigation_id}", response_model=InvestigationDetailResponse)
 async def get_investigation(
     investigation_id: str,
     session: AsyncSession = Depends(get_session),
-) -> InvestigationResponse:
+) -> InvestigationDetailResponse:
     """Return a single investigation by ID."""
-    inv = await session.get(InvestigationORM, investigation_id)
+    inv = await session.get(
+        InvestigationORM,
+        investigation_id,
+        options=[selectinload(InvestigationORM.diagnosis)],
+    )
     if inv is None:
         raise HTTPException(status_code=404, detail="Investigation not found")
-    return InvestigationResponse.model_validate(inv)
+    return InvestigationDetailResponse.model_validate(inv)
 
 
 # ── GET /api/investigations/{id}/hypotheses ───────────────────────────────────

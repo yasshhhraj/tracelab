@@ -160,8 +160,7 @@ async def test_run_investigation_status_transitions(
     db_engine, session_factory, tmp_path: Path
 ):
     """
-    AC-4: after CP-07 extension, investigation ends at ARBITRATING.
-    (CP-06 contract was VERIFYING; CP-07 extends to ARBITRATING.)
+    AC-4: after CP-08, investigation reaches WAITING_FOR_REVIEW.
     """
     inv_id = await _seed_investigation(session_factory, tmp_path)
 
@@ -182,7 +181,7 @@ async def test_run_investigation_status_transitions(
         inv = await session.get(InvestigationORM, inv_id)
 
     assert inv is not None
-    assert inv.status == InvestigationStatus.ARBITRATING
+    assert inv.status == InvestigationStatus.WAITING_FOR_REVIEW
 
 
 @pytest.mark.asyncio
@@ -222,7 +221,7 @@ async def test_run_investigation_partial_agent_failure(
     assert len(blocked) == 1
     assert blocked[0].agent_type == "code_path"
     assert inv is not None
-    assert inv.status == InvestigationStatus.ARBITRATING
+    assert inv.status == InvestigationStatus.WAITING_FOR_REVIEW
 
 
 @pytest.mark.asyncio
@@ -417,7 +416,7 @@ async def test_orchestrator_reaches_arbitrating_after_verification(
         inv = await session.get(InvestigationORM, inv_id)
 
     assert inv is not None
-    assert inv.status == InvestigationStatus.ARBITRATING
+    assert inv.status == InvestigationStatus.WAITING_FOR_REVIEW
 
 
 @pytest.mark.asyncio

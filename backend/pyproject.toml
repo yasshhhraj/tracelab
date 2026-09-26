@@ -17,6 +17,7 @@ dependencies = [
     # CP-02 additions (declared now so later checkpoints don't change pyproject)
     "sqlalchemy[asyncio]>=2.0",
     "aiosqlite>=0.20",
+    "asyncpg>=0.29",
     "alembic>=1.13",
     # CP-11 / CP-12 (declared now, unused until those CPs)
     "httpx>=0.27",
@@ -34,6 +35,7 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+norecursedirs = ["tests/fixtures"]
 
 [tool.ruff]
 line-length = 100

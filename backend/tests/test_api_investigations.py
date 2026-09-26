@@ -121,6 +121,19 @@ async def test_create_investigation_returns_201(client_with_db: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_create_investigation_uses_configured_repository(client_with_db: AsyncClient):
+    payload = dict(_VALID_PAYLOAD)
+    del payload["repository"]
+    with (
+        patch("app.routers.investigations.settings.target_repository", "/home/yashraj/loreforge"),
+        patch("app.routers.investigations.run_investigation", new=AsyncMock()),
+    ):
+        response = await client_with_db.post("/api/investigations", json=payload)
+    assert response.status_code == 201
+    assert response.json()["repository"] == "/home/yashraj/loreforge"
+
+
+@pytest.mark.asyncio
 async def test_create_investigation_missing_required_field_returns_422(
     client_with_db: AsyncClient,
 ):

@@ -7,7 +7,7 @@ class InvestigationCreate(BaseModel):
     """Request body for POST /api/investigations."""
 
     jira_issue_id: str
-    repository: str
+    repository: str | None = None
     base_branch: str = "main"
     # Inline bug context — avoids nested JSON in the request body
     symptom: str
@@ -32,6 +32,33 @@ class InvestigationResponse(BaseModel):
     bug_context: dict | None
     created_at: datetime
     updated_at: datetime
+
+
+class RejectedHypothesisSchema(BaseModel):
+    hypothesis_id: str
+    agent_type: str
+    summary: str
+    rejection_reason: str
+
+
+class DiagnosisSchema(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: str
+    investigation_id: str
+    selected_hypothesis_id: str | None
+    summary: str
+    verified_cause: str
+    evidence: list[str]
+    rejected_hypotheses: list[RejectedHypothesisSchema]
+    changed_files: list[str]
+    risk: str
+    recommended_action: str
+    created_at: datetime
+
+
+class InvestigationDetailResponse(InvestigationResponse):
+    diagnosis: DiagnosisSchema | None = None
 
 
 class InvestigationListResponse(BaseModel):

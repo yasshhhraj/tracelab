@@ -1,11 +1,12 @@
 """
-Orchestrator — CP-06 / CP-07
+Orchestrator — CP-06 through CP-08
 
 Runs the three investigation agents concurrently, then drives each hypothesis
-through the VerificationEngine sequentially.
+through the VerificationEngine sequentially, then persists an Arbiter diagnosis.
 
 Status flow:
     CREATED → CONTEXT_LOADING → INVESTIGATING → VERIFYING → ARBITRATING
+    → WAITING_FOR_REVIEW
     On total failure: → FAILED
 
 AGENTS.md constraints enforced here:
@@ -20,11 +21,13 @@ import asyncio
 import contextlib
 import logging
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.agents.arbiter_agent import ArbiterAgent
 from app.agents.base import AgentContext, AgentResult
 from app.agents.code_path_agent import run_code_path_agent
 from app.agents.git_history_agent import run_git_history_agent
@@ -164,7 +167,7 @@ async def _run_verification(
     machine can interfere via port conflicts, file locks, etc.
 
     After all hypotheses are processed, transitions the investigation to
-    ARBITRATING (handed off to CP-08 Arbiter).
+    ARBITRATING for the Arbiter.
     """
     engine = VerificationEngine(session_factory)
 
@@ -175,9 +178,7 @@ async def _run_verification(
             if hyp is None:
                 continue
             if hyp.status == HypothesisStatus.BLOCKED:
-                logger.info(
-                    "Skipping verification for BLOCKED hypothesis %s", hypothesis_id
-                )
+                logger.info("Skipping verification for BLOCKED hypothesis %s", hypothesis_id)
                 continue
             if not hyp.candidate_fix:
                 logger.info(
@@ -193,9 +194,7 @@ async def _run_verification(
                 bug_context=bug_context,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.exception(
-                "VerificationEngine raised for hypothesis %s: %s", hypothesis_id, exc
-            )
+            logger.exception("VerificationEngine raised for hypothesis %s: %s", hypothesis_id, exc)
             with contextlib.suppress(Exception):
                 async with session_factory() as session:
                     hyp = await session.get(Hypothesis, hypothesis_id)
@@ -204,6 +203,24 @@ async def _run_verification(
                         await session.commit()
 
     await _set_status(session_factory, investigation_id, InvestigationStatus.ARBITRATING)
+
+
+async def _run_arbitration(
+    session_factory: async_sessionmaker,
+    investigation_id: str,
+) -> None:
+    """Persist an evidence-based diagnosis and finish automated investigation."""
+    try:
+        await ArbiterAgent().run(investigation_id, session_factory)
+        async with session_factory() as session:
+            investigation = await session.get(Investigation, investigation_id)
+            if investigation is not None:
+                investigation.status = InvestigationStatus.WAITING_FOR_REVIEW
+                investigation.completed_at = datetime.now(UTC)
+                await session.commit()
+    except Exception:
+        logger.exception("Arbitration failed for investigation %s", investigation_id)
+        await _set_status(session_factory, investigation_id, InvestigationStatus.FAILED)
 
 
 # ── public API ────────────────────────────────────────────────────────────────
@@ -221,6 +238,7 @@ async def run_investigation(
 
     Status flow:
         CREATED → CONTEXT_LOADING → INVESTIGATING → VERIFYING → ARBITRATING
+        → WAITING_FOR_REVIEW
         On total failure: → FAILED
 
     AGENTS.md constraints:
@@ -288,9 +306,7 @@ async def run_investigation(
                 worktree_paths.append(None)
 
         # Effective worktree path per agent (fallback: repo_path)
-        agent_worktree_paths = [
-            wt if wt is not None else repo_path for wt in worktree_paths
-        ]
+        agent_worktree_paths = [wt if wt is not None else repo_path for wt in worktree_paths]
 
         # Build one AgentContext per agent
         contexts: list[AgentContext] = [
@@ -354,6 +370,7 @@ async def run_investigation(
             hypothesis_worktree_map=hypothesis_worktree_map,
             bug_context=bug_context,
         )
+        await _run_arbitration(session_factory, investigation_id)
 
     except Exception as exc:
         logger.exception("Unhandled error in run_investigation(%s): %s", investigation_id, exc)

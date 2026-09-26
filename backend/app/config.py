@@ -1,3 +1,4 @@
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,9 +16,13 @@ class Settings(BaseSettings):
 
     # Database — never log this value
     database_url: str = "sqlite+aiosqlite:///./tracelab.db"
+    target_repository: str = ""
 
     # LLM — secret, never appears in logs or prompts
-    llm_api_key: str = ""
+    llm_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("AWS_BEDROCK_API_TEST", "LLM_API_KEY"),
+    )
     llm_model: str = "gpt-4o"
     llm_base_url: str = "https://api.openai.com/v1"
 
