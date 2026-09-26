@@ -244,12 +244,13 @@ async def test_verify_inconclusive_when_pre_fix_passes(
 ):
     """AC-3: pre-fix test already passes → INCONCLUSIVE (AGENTS.md core rule)."""
     inv_id = await _seed_investigation(session_factory)
-    # Use the existing sequential test as the regression test — it always passes
+    # reproduction_plan uses the concurrent test (FAILS before fix) so step 1 passes.
+    # The generator returns the always-passing sequential test → step 3 gets PASS → INCONCLUSIVE.
     hyp_id = await _seed_hypothesis(
         session_factory,
         inv_id,
         candidate_fix=CORRECT_PATCH,
-        reproduction_plan=["tests/test_review.py"],  # this won't fail
+        reproduction_plan=[REGRESSION_TEST_PATH],  # fails on buggy code → reproduction succeeds
     )
 
     engine = VerificationEngine(session_factory)

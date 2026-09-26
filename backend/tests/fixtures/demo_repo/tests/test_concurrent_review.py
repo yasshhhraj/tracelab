@@ -8,8 +8,8 @@ FAILS on the original buggy code (no lock).
 PASSES after the fix (atomic check-and-insert with a threading.Lock).
 """
 
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 

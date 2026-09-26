@@ -7,20 +7,17 @@ WRONG_PATCH   — valid diff that touches review_service.py but doesn't fix the 
 INVALID_PATCH — malformed diff that git apply will reject.
 """
 
-# Single-hunk patch that rewrites the entire review_repository.py with the fix.
+# Single-hunk patch that fixes the race condition by adding a threading lock.
 CORRECT_PATCH = """\
+diff --git a/review_repository.py b/review_repository.py
 --- a/review_repository.py
 +++ b/review_repository.py
-@@ -1,29 +1,32 @@
- \"\"\"
- ReviewRepository — in-memory store for reviews.
- 
- BUG: insert() has no locking — concurrent callers can both pass the
+@@ -5,24 +5,27 @@ BUG: insert() has no locking — concurrent callers can both pass the
  find_by_key() check and both insert, producing duplicates.
  \"\"\"
  
 +import threading
-+
+ 
  
  class ReviewRepository:
      def __init__(self) -> None:
