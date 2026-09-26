@@ -1,5 +1,5 @@
 """
-Investigations router — CP-06 through CP-09
+Investigations router — CP-06 through CP-12
 
 Endpoints:
     POST  /api/investigations                        create + trigger background task
@@ -15,7 +15,9 @@ AGENTS.md constraint enforced here:
     POST /pull-request MUST check status == APPROVED — raises 409 otherwise.
 """
 
+import contextlib
 import logging
+import re
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func, select
@@ -29,6 +31,11 @@ from app.db.models import Investigation as InvestigationORM
 from app.db.models import InvestigationStatus
 from app.db.models import Patch as PatchORM
 from app.db.session import AsyncSessionLocal, get_session
+from app.integrations.github_client import (
+    GitHubClient,
+    GitHubClientError,
+)
+from app.integrations.pr_body import build_pr_body, build_pr_title
 from app.orchestrator import run_investigation
 from app.schemas.bug_context import BugContext
 from app.schemas.investigation import (
@@ -46,6 +53,100 @@ from app.schemas.investigation import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/investigations", tags=["investigations"])
+
+
+# ── CP-12 helpers ─────────────────────────────────────────────────────────────
+
+
+def _parse_github_repo(repository: str) -> tuple[str, str]:
+    """
+    Extract (owner, repo) from a GitHub repository string.
+
+    Accepts:
+        "github.com/org/repo"
+        "https://github.com/org/repo"
+        "https://github.com/org/repo.git"
+        "org/repo"  (bare owner/repo)
+
+    Returns (owner, repo).
+    Raises ValueError if the string cannot be parsed.
+    """
+    # Strip common prefixes
+    cleaned = re.sub(r"^https?://", "", repository)
+    cleaned = re.sub(r"^github\.com/", "", cleaned)
+    cleaned = cleaned.rstrip("/").removesuffix(".git")
+
+    parts = cleaned.split("/")
+    if len(parts) < 2 or not parts[0] or not parts[1]:
+        raise ValueError(
+            f"Cannot parse GitHub owner/repo from repository string: '{repository}'"
+        )
+    return parts[0], parts[1]
+
+
+async def _create_github_pr(
+    patch: PatchORM,
+    inv: InvestigationORM,
+    client: GitHubClient,
+) -> str:
+    """
+    Apply the winning patch diff on a fresh clone and open a draft PR.
+
+    Returns the HTML URL of the created pull request.
+    Raises GitHubClientError (or subclass) on any failure.
+    """
+    owner, repo = _parse_github_repo(inv.repository)
+
+    # Build PR metadata from the diagnosis
+    diagnosis = inv.diagnosis
+    bug_ctx_dict = inv.bug_context or {}
+    issue_id = inv.external_issue_id
+    symptom = bug_ctx_dict.get("symptom", issue_id)
+    base_branch = inv.base_branch or "main"
+
+    if diagnosis:
+        verified_cause = diagnosis.verified_cause or ""
+        evidence = list(diagnosis.evidence or [])
+        rejected = list(diagnosis.rejected_hypotheses or [])
+        changed_files = list(diagnosis.changed_files or [])
+        risk = diagnosis.risk or "unknown"
+    else:
+        verified_cause = ""
+        evidence = []
+        rejected = []
+        changed_files = list(patch.files_changed or [])
+        risk = "unknown"
+
+    title = build_pr_title(issue_id, symptom)
+    body = build_pr_body(
+        issue_id=issue_id,
+        symptom=symptom,
+        verified_cause=verified_cause,
+        evidence=evidence,
+        rejected_hypotheses=rejected,
+        changed_files=changed_files,
+        risk=risk,
+    )
+
+    # Push the patch onto a fresh clone, then open the draft PR
+    await client.clone_apply_and_push(
+        owner=owner,
+        repo=repo,
+        branch=patch.branch,
+        base_branch=base_branch,
+        diff=patch.diff or "",
+        commit_message=f"TraceLab fix: {issue_id}",
+    )
+
+    pr_url = await client.create_draft_pr(
+        owner=owner,
+        repo=repo,
+        branch=patch.branch,
+        base=base_branch,
+        title=title,
+        body=body,
+    )
+    return pr_url
 
 # ── valid transitions for approve / reject ────────────────────────────────────
 _APPROVABLE_STATUSES = {InvestigationStatus.WAITING_FOR_REVIEW}
@@ -241,14 +342,19 @@ async def create_pull_request(
     session: AsyncSession = Depends(get_session),
 ) -> PullRequestResponse:
     """
-    Create a draft pull request for an approved investigation.
+    Create a GitHub draft pull request for an approved investigation.
 
     AGENTS.md constraint: status MUST be APPROVED — raises 409 otherwise.
-    Reads the winning patch from the diagnosis selected_hypothesis_id.
 
-    Note: Full GitHub integration is implemented in CP-12. This endpoint
-    returns a stub PR URL derived from the investigation and branch while
-    confirming the approval gate is enforced.
+    Steps (CP-12):
+      1. Load investigation + diagnosis; assert APPROVED.
+      2. Load the winning Patch row.
+      3. If patch.pr_url already set → return cached (idempotent).
+      4. If GITHUB_TOKEN not configured → return stub URL (dev/demo mode).
+      5. Push diff + create draft PR via GitHubClient.
+      6. Persist pr_url on Patch row.
+      7. Post PR link as Jira comment (fire-and-forget, suppress errors).
+      8. Return PullRequestResponse.
     """
     inv = await session.get(
         InvestigationORM,
@@ -265,12 +371,12 @@ async def create_pull_request(
             detail="Investigation must be APPROVED before PR creation",
         )
 
-    # Resolve the winning patch branch from the diagnosis
+    # ── resolve patch ─────────────────────────────────────────────────────────
     pr_url: str = ""
     branch: str = ""
+    patch: PatchORM | None = None
 
     if inv.diagnosis and inv.diagnosis.selected_hypothesis_id:
-        # Retrieve the latest patch for the winning hypothesis
         patch_result = await session.execute(
             select(PatchORM)
             .where(PatchORM.hypothesis_id == inv.diagnosis.selected_hypothesis_id)
@@ -279,31 +385,57 @@ async def create_pull_request(
         )
         patch = patch_result.scalar_one_or_none()
 
-        if patch:
-            branch = patch.branch
-            if patch.pr_url:
-                # Already created (e.g. by CP-12 GitHub integration)
-                pr_url = patch.pr_url
-            else:
-                # Stub URL — full GitHub push/PR in CP-12
-                pr_url = (
-                    f"https://github.com/placeholder/{inv.repository.split('/')[-1]}"
-                    f"/pull/new/{branch}"
-                )
-                patch.pr_url = pr_url
-                await session.commit()
+    if patch:
+        branch = patch.branch
+        if patch.pr_url:
+            # ── idempotent: PR already created ───────────────────────────────
+            logger.info(
+                "PR already exists for investigation %s: %s",
+                investigation_id,
+                patch.pr_url,
+            )
+            return PullRequestResponse(
+                investigation_id=investigation_id,
+                pr_url=patch.pr_url,
+                branch=branch,
+            )
 
     if not branch:
-        # No patch available yet — derive a branch name from the investigation
         branch = f"ai-debug/{inv.external_issue_id}-diagnosis"
-        pr_url = (
-            f"https://github.com/placeholder/{inv.repository.split('/')[-1]}"
-            f"/pull/new/{branch}"
+
+    # ── GitHub integration (CP-12) or stub (dev mode) ─────────────────────────
+    if settings.github_token and patch:
+        try:
+            pr_url = await _create_github_pr(patch, inv, GitHubClient())
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Cannot parse GitHub repository: {exc}",
+            ) from exc
+        except GitHubClientError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"GitHub error: {exc}",
+            ) from exc
+    else:
+        # Dev / demo mode — no token configured; return stub URL
+        repo_name = inv.repository.split("/")[-1]
+        pr_url = f"https://github.com/placeholder/{repo_name}/pull/new/{branch}"
+
+    # ── persist pr_url on patch ───────────────────────────────────────────────
+    if patch:
+        patch.pr_url = pr_url
+        await session.commit()
+
+    # ── post Jira PR-link comment (CP-11 + CP-12, fire-and-forget) ────────────
+    with contextlib.suppress(Exception):
+        from app.integrations.jira_client import JiraClient
+        await JiraClient().add_comment(
+            inv.external_issue_id,
+            f"Draft PR created: {pr_url}",
         )
 
-    logger.info(
-        "Pull-request stub created for investigation %s: %s", investigation_id, pr_url
-    )
+    logger.info("Pull-request created for investigation %s: %s", investigation_id, pr_url)
     return PullRequestResponse(
         investigation_id=investigation_id,
         pr_url=pr_url,
