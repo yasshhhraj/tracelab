@@ -39,5 +39,5 @@ next-env.d.ts
 .vscode/
 
 # Project-specific
-bob_sessions/
+# bob_sessions/
 backend/.python-version
