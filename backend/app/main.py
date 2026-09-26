@@ -7,6 +7,7 @@ from app.config import settings
 from app.routers.health import router as health_router
 from app.routers.hypotheses import router as hypotheses_router
 from app.routers.investigations import router as investigations_router
+from app.routers.jira import router as jira_router
 
 
 @asynccontextmanager
@@ -37,6 +38,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(investigations_router)
     app.include_router(hypotheses_router)
+    app.include_router(jira_router)
 
     return app
 

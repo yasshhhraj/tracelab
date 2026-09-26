@@ -1,8 +1,9 @@
 """
-Orchestrator — CP-06 through CP-08
+Orchestrator — CP-06 through CP-11
 
 Runs the three investigation agents concurrently, then drives each hypothesis
 through the VerificationEngine sequentially, then persists an Arbiter diagnosis.
+On completion, posts a structured comment back to the originating Jira issue.
 
 Status flow:
     CREATED → CONTEXT_LOADING → INVESTIGATING → VERIFYING → ARBITRATING
@@ -32,8 +33,10 @@ from app.agents.base import AgentContext, AgentResult
 from app.agents.code_path_agent import run_code_path_agent
 from app.agents.git_history_agent import run_git_history_agent
 from app.agents.test_behavior_agent import run_test_behavior_agent
+from app.config import settings
 from app.db.models import (
     AgentEvent,
+    Diagnosis,
     Experiment,
     Hypothesis,
     HypothesisStatus,
@@ -223,6 +226,84 @@ async def _run_arbitration(
         await _set_status(session_factory, investigation_id, InvestigationStatus.FAILED)
 
 
+async def _post_jira_comment(
+    session_factory: async_sessionmaker,
+    investigation_id: str,
+) -> None:
+    """
+    Fire-and-forget: add a structured comment to the originating Jira issue.
+
+    CP-11 — called after the investigation reaches WAITING_FOR_REVIEW.
+
+    Skipped silently when:
+    - settings.jira_base_url or settings.jira_api_token is empty (Jira not configured)
+    - The investigation has no diagnosis record yet
+    - Any JiraClientError (a Jira outage must never fail an investigation)
+
+    SECURITY: The comment body contains only diagnosis data — no credentials,
+    tokens, or env-var values are included (AGENTS.md).
+    """
+    if not settings.jira_base_url or not settings.jira_api_token:
+        logger.debug("Jira not configured — skipping post-diagnosis comment")
+        return
+
+    async with session_factory() as session:
+        from sqlalchemy.orm import selectinload
+
+        investigation = await session.get(
+            Investigation,
+            investigation_id,
+            options=[selectinload(Investigation.diagnosis)],
+        )
+        if investigation is None:
+            return
+
+        diagnosis: Diagnosis | None = investigation.diagnosis
+        if diagnosis is None:
+            logger.debug(
+                "No diagnosis for investigation %s — skipping Jira comment", investigation_id
+            )
+            return
+
+        issue_id = investigation.external_issue_id
+        n_hypotheses = len(investigation.hypotheses) if investigation.hypotheses else 3
+        evidence_lines = "\n".join(f"- {e}" for e in (diagnosis.evidence or []))
+
+        comment_lines = [
+            "AI Debugging Analysis Complete",
+            "",
+            f"{n_hypotheses} root-cause hypotheses investigated.",
+        ]
+        if diagnosis.verified_cause:
+            comment_lines.append(f"Verified: {diagnosis.verified_cause}")
+        if evidence_lines:
+            comment_lines += ["", "Evidence:", evidence_lines]
+        comment_lines += [
+            "",
+            f"Risk: {diagnosis.risk}",
+            f"Recommended action: {diagnosis.recommended_action}",
+            "",
+            f"TraceLab investigation: {investigation_id}",
+        ]
+        comment = "\n".join(comment_lines)
+
+    # Import here to avoid circular imports (jira_client → config, orchestrator → jira_client).
+    from app.integrations.jira_client import JiraClient, JiraClientError
+
+    try:
+        await JiraClient().add_comment(issue_id, comment)
+        logger.info(
+            "Posted Jira comment for investigation %s on issue %s", investigation_id, issue_id
+        )
+    except JiraClientError:
+        logger.warning(
+            "Failed to post Jira comment for investigation %s on issue %s",
+            investigation_id,
+            issue_id,
+            exc_info=True,
+        )
+
+
 # ── public API ────────────────────────────────────────────────────────────────
 
 
@@ -371,6 +452,11 @@ async def run_investigation(
             bug_context=bug_context,
         )
         await _run_arbitration(session_factory, investigation_id)
+
+        # CP-11: post diagnosis summary back to Jira — fire-and-forget,
+        # never allowed to raise (AGENTS.md: Jira outage must not fail investigation).
+        with contextlib.suppress(Exception):
+            await _post_jira_comment(session_factory, investigation_id)
 
     except Exception as exc:
         logger.exception("Unhandled error in run_investigation(%s): %s", investigation_id, exc)
