@@ -253,7 +253,10 @@ async def _post_jira_comment(
         investigation = await session.get(
             Investigation,
             investigation_id,
-            options=[selectinload(Investigation.diagnosis)],
+            options=[
+                selectinload(Investigation.diagnosis),
+                selectinload(Investigation.hypotheses),
+            ],
         )
         if investigation is None:
             return

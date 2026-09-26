@@ -18,6 +18,7 @@ AGENTS.md constraint enforced here:
 import contextlib
 import logging
 import re
+from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func, select
@@ -27,8 +28,8 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.db.models import AgentEvent as AgentEventORM
 from app.db.models import Hypothesis as HypothesisORM
+from app.db.models import HypothesisStatus, InvestigationStatus
 from app.db.models import Investigation as InvestigationORM
-from app.db.models import InvestigationStatus
 from app.db.models import Patch as PatchORM
 from app.db.session import AsyncSessionLocal, get_session
 from app.integrations.github_client import (
@@ -49,6 +50,7 @@ from app.schemas.investigation import (
     PullRequestResponse,
     RejectResponse,
 )
+from app.tools.executor import run_command
 
 logger = logging.getLogger(__name__)
 
@@ -71,17 +73,33 @@ def _parse_github_repo(repository: str) -> tuple[str, str]:
     Returns (owner, repo).
     Raises ValueError if the string cannot be parsed.
     """
-    # Strip common prefixes
+    # Strip common prefixes, including the SSH form returned by git remote.
+    repository = re.sub(r"^git@github\.com:", "github.com/", repository)
+    repository = re.sub(r"^ssh://git@github\.com/", "github.com/", repository)
     cleaned = re.sub(r"^https?://", "", repository)
-    cleaned = re.sub(r"^github\.com/", "", cleaned)
+    if cleaned.startswith("github.com/"):
+        cleaned = cleaned.removeprefix("github.com/")
+    elif "/" in cleaned and (cleaned.startswith("/") or "." in cleaned.split("/", 1)[0]):
+        raise ValueError(f"Not a GitHub repository: '{repository}'")
     cleaned = cleaned.rstrip("/").removesuffix(".git")
 
     parts = cleaned.split("/")
-    if len(parts) < 2 or not parts[0] or not parts[1]:
+    if len(parts) != 2 or not parts[0] or not parts[1]:
         raise ValueError(
             f"Cannot parse GitHub owner/repo from repository string: '{repository}'"
         )
     return parts[0], parts[1]
+
+
+async def _resolve_github_repo(repository: str) -> tuple[str, str]:
+    """Resolve a local investigation checkout to its GitHub origin."""
+    local_path = Path(repository)
+    if local_path.is_dir():
+        result = await run_command(["git", "remote", "get-url", "origin"], cwd=local_path)
+        if result.exit_code != 0 or result.timed_out:
+            raise ValueError(f"Cannot read GitHub origin for local repository: '{repository}'")
+        repository = result.stdout.strip()
+    return _parse_github_repo(repository)
 
 
 async def _create_github_pr(
@@ -95,7 +113,7 @@ async def _create_github_pr(
     Returns the HTML URL of the created pull request.
     Raises GitHubClientError (or subclass) on any failure.
     """
-    owner, repo = _parse_github_repo(inv.repository)
+    owner, repo = await _resolve_github_repo(inv.repository)
 
     # Build PR metadata from the diagnosis
     diagnosis = inv.diagnosis
@@ -350,7 +368,7 @@ async def create_pull_request(
       1. Load investigation + diagnosis; assert APPROVED.
       2. Load the winning Patch row.
       3. If patch.pr_url already set → return cached (idempotent).
-      4. If GITHUB_TOKEN not configured → return stub URL (dev/demo mode).
+      4. Require a verified patch and GITHUB_TOKEN.
       5. Push diff + create draft PR via GitHubClient.
       6. Persist pr_url on Patch row.
       7. Post PR link as Jira comment (fire-and-forget, suppress errors).
@@ -371,61 +389,56 @@ async def create_pull_request(
             detail="Investigation must be APPROVED before PR creation",
         )
 
-    # ── resolve patch ─────────────────────────────────────────────────────────
-    pr_url: str = ""
-    branch: str = ""
-    patch: PatchORM | None = None
+    # ── resolve verified patch ────────────────────────────────────────────────
+    selected_id = inv.diagnosis.selected_hypothesis_id if inv.diagnosis else None
+    if not selected_id:
+        raise HTTPException(status_code=409, detail="No verified hypothesis is available for a PR")
 
-    if inv.diagnosis and inv.diagnosis.selected_hypothesis_id:
-        patch_result = await session.execute(
-            select(PatchORM)
-            .where(PatchORM.hypothesis_id == inv.diagnosis.selected_hypothesis_id)
-            .order_by(PatchORM.created_at.desc())
-            .limit(1)
+    hypothesis = await session.get(HypothesisORM, selected_id)
+    if hypothesis is None or hypothesis.status != HypothesisStatus.VERIFIED:
+        raise HTTPException(status_code=409, detail="Selected hypothesis is not VERIFIED")
+
+    patch_result = await session.execute(
+        select(PatchORM)
+        .where(PatchORM.hypothesis_id == selected_id)
+        .order_by(PatchORM.created_at.desc())
+        .limit(1)
+    )
+    patch = patch_result.scalar_one_or_none()
+    if patch is None or not patch.diff or not patch.diff.strip():
+        raise HTTPException(
+            status_code=409,
+            detail="No patch is available for the verified hypothesis",
         )
-        patch = patch_result.scalar_one_or_none()
 
-    if patch:
-        branch = patch.branch
-        if patch.pr_url:
-            # ── idempotent: PR already created ───────────────────────────────
-            logger.info(
-                "PR already exists for investigation %s: %s",
-                investigation_id,
-                patch.pr_url,
-            )
-            return PullRequestResponse(
-                investigation_id=investigation_id,
-                pr_url=patch.pr_url,
-                branch=branch,
-            )
+    branch = patch.branch
+    if patch.pr_url:
+        logger.info("PR already exists for investigation %s: %s", investigation_id, patch.pr_url)
+        return PullRequestResponse(
+            investigation_id=investigation_id,
+            pr_url=patch.pr_url,
+            branch=branch,
+        )
 
-    if not branch:
-        branch = f"ai-debug/{inv.external_issue_id}-diagnosis"
+    if not settings.github_token:
+        raise HTTPException(status_code=503, detail="GITHUB_TOKEN is not configured")
 
-    # ── GitHub integration (CP-12) or stub (dev mode) ─────────────────────────
-    if settings.github_token and patch:
-        try:
-            pr_url = await _create_github_pr(patch, inv, GitHubClient())
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Cannot parse GitHub repository: {exc}",
-            ) from exc
-        except GitHubClientError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail=f"GitHub error: {exc}",
-            ) from exc
-    else:
-        # Dev / demo mode — no token configured; return stub URL
-        repo_name = inv.repository.split("/")[-1]
-        pr_url = f"https://github.com/placeholder/{repo_name}/pull/new/{branch}"
+    try:
+        pr_url = await _create_github_pr(patch, inv, GitHubClient())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Cannot parse GitHub repository: {exc}",
+        ) from exc
+    except GitHubClientError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"GitHub error: {exc}",
+        ) from exc
 
     # ── persist pr_url on patch ───────────────────────────────────────────────
-    if patch:
-        patch.pr_url = pr_url
-        await session.commit()
+    patch.pr_url = pr_url
+    await session.commit()
 
     # ── post Jira PR-link comment (CP-11 + CP-12, fire-and-forget) ────────────
     with contextlib.suppress(Exception):

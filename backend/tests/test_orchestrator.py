@@ -27,6 +27,7 @@ from app.agents.llm.openai_model import OpenAIAgentModel
 from app.db.models import (
     AgentEvent as AgentEventORM,
 )
+from app.db.models import Diagnosis as DiagnosisORM
 from app.db.models import (
     Hypothesis as HypothesisORM,
 )
@@ -37,7 +38,7 @@ from app.db.models import (
 from app.db.models import (
     Investigation as InvestigationORM,
 )
-from app.orchestrator import run_investigation
+from app.orchestrator import _post_jira_comment, run_investigation
 from app.schemas.bug_context import BugContext
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -458,3 +459,47 @@ async def test_orchestrator_skips_blocked_hypotheses_in_verification(
     # candidate_fix (from the mock emit), so they are also skipped.
     # The important assertion: verify was called at most 2 times (not 3).
     assert len(verify_calls) <= 2
+
+
+@pytest.mark.asyncio
+async def test_post_jira_comment_loads_hypotheses_before_counting(
+    session_factory, tmp_path: Path
+):
+    """The async Jira feedback path must not lazy-load hypotheses."""
+    inv_id = await _seed_investigation(session_factory, tmp_path)
+    async with session_factory() as session:
+        session.add(
+            HypothesisORM(
+                investigation_id=inv_id,
+                agent_type="code_path",
+                summary="Candidate cause",
+                reasoning_summary="Observed behavior",
+                candidate_fix="",
+                suspected_files=[],
+                reproduction_plan=[],
+                confidence="low",
+            )
+        )
+        session.add(
+            DiagnosisORM(
+                investigation_id=inv_id,
+                summary="No verified cause",
+                verified_cause="",
+                evidence=[],
+                rejected_hypotheses=[],
+                changed_files=[],
+                risk="unknown",
+                recommended_action="Review evidence",
+            )
+        )
+        await session.commit()
+
+    with (
+        patch("app.orchestrator.settings.jira_base_url", "https://example.atlassian.net"),
+        patch("app.orchestrator.settings.jira_api_token", "test-token"),
+        patch("app.integrations.jira_client.JiraClient.add_comment", new_callable=AsyncMock) as add_comment,
+    ):
+        await _post_jira_comment(session_factory, inv_id)
+
+    add_comment.assert_awaited_once()
+    assert "1 root-cause hypotheses investigated" in add_comment.await_args.args[1]

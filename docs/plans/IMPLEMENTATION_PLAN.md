@@ -622,6 +622,8 @@ After diagnosis ready: add comment to Jira with investigation summary + PR link.
 
 ## CP-12 — GitHub Draft PR Creation
 
+**Live validation deferred until after MVP deployment.** Implementation and mocked tests are complete, but no real draft PR has been created from a verified patch. Track the remaining acceptance test and exact resume steps in [CP-12 live validation follow-up](CP-12-live-validation-follow-up.md). This does not block CP-13.
+
 **Goal:** After human approval, the winning patch is pushed and a draft PR is opened.  
 **Deployable state:** `POST /api/investigations/{id}/pull-request` creates a real GitHub draft PR.
 

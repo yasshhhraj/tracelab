@@ -136,8 +136,16 @@ async def test_pull_request_after_approve_returns_200(
     assert approve_resp.status_code == 200
     assert approve_resp.json()["status"] == InvestigationStatus.APPROVED
 
-    # Then create PR
-    pr_resp = await client_with_db.post(f"/api/investigations/{inv_id}/pull-request")
+    # Then create PR through the configured GitHub path.
+    with (
+        patch("app.routers.investigations.settings.github_token", "test-token"),
+        patch(
+            "app.routers.investigations._create_github_pr",
+            new_callable=AsyncMock,
+            return_value="https://github.com/org/repo/pull/12",
+        ),
+    ):
+        pr_resp = await client_with_db.post(f"/api/investigations/{inv_id}/pull-request")
     assert pr_resp.status_code == 200
     data = pr_resp.json()
     assert data["investigation_id"] == inv_id
@@ -178,14 +186,22 @@ async def test_pull_request_on_rejected_investigation_returns_409(
 async def test_pull_request_stores_pr_url_in_patch(
     client_with_db: AsyncClient, db_engine: AsyncEngine
 ):
-    """PR creation persists the stub pr_url on the Patch row."""
+    """PR creation persists the real GitHub PR URL on the Patch row."""
     from sqlalchemy import select
 
     inv_id = await _make_investigation(db_engine, InvestigationStatus.WAITING_FOR_REVIEW)
     hyp_id, branch = await _attach_diagnosis_and_patch(db_engine, inv_id)
 
     await client_with_db.post(f"/api/investigations/{inv_id}/approve")
-    pr_resp = await client_with_db.post(f"/api/investigations/{inv_id}/pull-request")
+    with (
+        patch("app.routers.investigations.settings.github_token", "test-token"),
+        patch(
+            "app.routers.investigations._create_github_pr",
+            new_callable=AsyncMock,
+            return_value="https://github.com/org/repo/pull/13",
+        ),
+    ):
+        pr_resp = await client_with_db.post(f"/api/investigations/{inv_id}/pull-request")
     assert pr_resp.status_code == 200
     returned_pr_url = pr_resp.json()["pr_url"]
 
@@ -195,8 +211,8 @@ async def test_pull_request_stores_pr_url_in_patch(
         result = await session.execute(
             select(PatchORM).where(PatchORM.hypothesis_id == hyp_id)
         )
-        patch = result.scalar_one()
-    assert patch.pr_url == returned_pr_url
+        patch_row = result.scalar_one()
+    assert patch_row.pr_url == returned_pr_url
 
 
 # ── AC-PR-6  404 on unknown id ────────────────────────────────────────────────
@@ -228,6 +244,16 @@ async def test_second_approve_returns_409(
 # ══════════════════════════════════════════════════════════════════════════════
 
 from unittest.mock import AsyncMock, patch
+
+
+@pytest.fixture(autouse=True)
+def isolate_external_integrations(monkeypatch):
+    """PR route tests must not use developer credentials from backend/.env."""
+    from app.integrations.jira_client import JiraClient
+    from app.routers.investigations import settings
+
+    monkeypatch.setattr(settings, "github_token", "")
+    monkeypatch.setattr(JiraClient, "add_comment", AsyncMock())
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -307,6 +333,31 @@ def test_parse_github_repo_invalid():
 
     with pytest.raises(ValueError):
         _parse_github_repo("just-one-segment")
+
+    with pytest.raises(ValueError):
+        _parse_github_repo("https://gitlab.com/org/repo")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://github.com/org/repo.git",
+        "git@github.com:org/repo.git",
+    ],
+)
+async def test_resolve_local_repository_from_github_origin(tmp_path, origin):
+    """A local investigation checkout uses its GitHub origin for PR creation."""
+    from types import SimpleNamespace
+
+    from app.routers.investigations import _resolve_github_repo
+
+    with patch("app.routers.investigations.run_command", new_callable=AsyncMock) as git:
+        git.return_value = SimpleNamespace(exit_code=0, timed_out=False, stdout=origin)
+        assert await _resolve_github_repo(str(tmp_path)) == ("org", "repo")
+        git.assert_awaited_once_with(
+            ["git", "remote", "get-url", "origin"], cwd=tmp_path
+        )
 
 
 # ── CP-12 route integration tests ─────────────────────────────────────────────
@@ -439,6 +490,32 @@ async def test_pull_request_token_not_in_response_body(
 
     body_str = _json.dumps(response.json())
     assert secret_token not in body_str
+
+
+@pytest.mark.asyncio
+async def test_approved_investigation_without_verified_patch_returns_409(
+    client_with_db: AsyncClient, db_engine
+):
+    """Approval alone cannot produce a placeholder PR URL."""
+    inv_id = await _make_investigation(db_engine, InvestigationStatus.APPROVED)
+
+    response = await client_with_db.post(f"/api/investigations/{inv_id}/pull-request")
+
+    assert response.status_code == 409
+    assert "verified hypothesis" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_verified_patch_without_github_token_returns_503(
+    client_with_db: AsyncClient, db_engine
+):
+    """A real PR requires a configured GitHub token."""
+    inv_id, _, _ = await _seed_approved_investigation_with_patch(db_engine)
+
+    response = await client_with_db.post(f"/api/investigations/{inv_id}/pull-request")
+
+    assert response.status_code == 503
+    assert "GITHUB_TOKEN" in response.json()["detail"]
 
 
 # ── helper context manager for suppressing contextlib.suppress in tests ───────

@@ -1,5 +1,7 @@
 # CP-12 — GitHub Draft PR Creation
 
+> **Current status (2026-09-26):** Implementation and mocked tests are in place. Live draft-PR creation is deferred until after MVP deployment; see [CP-12 live validation follow-up](CP-12-live-validation-follow-up.md). The historical stub behavior described below has since been removed: missing verified patches return `409`, and a missing GitHub token returns `503`.
+
 **Goal:** After human approval, the winning patch branch is pushed to GitHub
 and a draft pull request is opened via the GitHub REST API v3.
 `POST /api/investigations/{id}/pull-request` transitions from returning a stub
