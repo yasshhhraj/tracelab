@@ -86,3 +86,100 @@ class HypothesisResponse(BaseModel):
     confidence: str
     status: str
     created_at: datetime
+
+
+# ── CP-09 schemas ─────────────────────────────────────────────────────────────
+
+
+class ExperimentResponse(BaseModel):
+    """Response model for a single Experiment record."""
+
+    model_config = {"from_attributes": True}
+
+    id: str
+    hypothesis_id: str
+    command: str
+    working_directory: str
+    exit_code: int | None
+    stdout: str
+    stderr: str
+    duration_ms: int
+    timed_out: bool
+    created_at: datetime
+
+
+class TestEvidenceResponse(BaseModel):
+    """Response model for a single TestEvidence record."""
+
+    model_config = {"from_attributes": True}
+
+    id: str
+    hypothesis_id: str
+    test_path: str
+    pre_fix_result: str | None
+    post_fix_result: str | None
+    existing_suite_result: str | None
+    runs: int
+    failures_before: int
+    failures_after: int
+    created_at: datetime
+
+
+class PatchResponse(BaseModel):
+    """Response model for a Patch record."""
+
+    model_config = {"from_attributes": True}
+
+    id: str
+    hypothesis_id: str
+    branch: str
+    commit_sha: str | None
+    diff: str
+    files_changed: list[str]
+    pr_url: str | None
+    created_at: datetime
+
+
+class HypothesisEvidenceResponse(BaseModel):
+    """Aggregate evidence response for GET /api/hypotheses/{id}/evidence."""
+
+    hypothesis: HypothesisResponse
+    experiments: list[ExperimentResponse]
+    test_evidence: list[TestEvidenceResponse]
+    patches: list[PatchResponse]
+
+
+class AgentEventResponse(BaseModel):
+    """Response model for a single AgentEvent."""
+
+    model_config = {"from_attributes": True}
+
+    id: str
+    investigation_id: str
+    agent: str
+    action: str
+    target: str | None
+    payload: dict | None
+    timestamp: datetime
+
+
+class ApproveResponse(BaseModel):
+    """Response for POST /api/investigations/{id}/approve."""
+
+    id: str
+    status: str
+
+
+class RejectResponse(BaseModel):
+    """Response for POST /api/investigations/{id}/reject."""
+
+    id: str
+    status: str
+
+
+class PullRequestResponse(BaseModel):
+    """Response for POST /api/investigations/{id}/pull-request."""
+
+    investigation_id: str
+    pr_url: str
+    branch: str

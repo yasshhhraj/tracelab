@@ -520,6 +520,8 @@ if investigation.status != InvestigationStatus.APPROVED:
 **Goal:** A minimal but functional Next.js dashboard showing investigations list and detail view.  
 **Deployable state:** `npm run dev` serves a working UI; `npm test` (if added) passes.
 
+**Detailed execution plan:** [CP-10 frontend dashboard](CP-10-frontend-dashboard.md).
+
 ### Routes
 
 | Route                    | Component                                             |
@@ -535,7 +537,7 @@ if investigation.status != InvestigationStatus.APPROVED:
 4. **Patch diff viewer** — syntax-highlighted unified diff.
 5. **Verification proof** — FAIL-before / PASS-after side-by-side.
 6. **Diagnosis card** — selected hypothesis, evidence bullets, risk badge, rejected list.
-7. **Action buttons** — Approve & Create Draft PR / Reject (only shown in `WAITING_FOR_REVIEW`).
+7. **Action buttons** — Approve / Reject (only shown in `WAITING_FOR_REVIEW`). Draft PR creation belongs to CP-12; the current endpoint returns a placeholder URL.
 
 ### UX rule (PRD §40)
 
@@ -545,24 +547,24 @@ Show concrete evidence over model confidence:
 Reproduced?       YES
 Failed before patch?  YES
 Passed after patch?   YES
-Existing tests?   183 / 183
+Existing tests?   PASS (recorded result)
 Competing hypotheses checked?  3
 ```
 
 ### Tasks
 
-1. `frontend/` — `npx create-next-app@latest --typescript`.
+1. Extend the existing Next.js 16 scaffold in `frontend/`.
 2. `frontend/app/investigations/page.tsx` — list view with `useSWR` polling.
 3. `frontend/app/investigations/[id]/page.tsx` — detail view.
 4. Shared components: `HypothesisCard`, `EvidencePanel`, `DiffViewer`, `DiagnosisCard`, `StatusBadge`.
 5. `frontend/lib/api.ts` — typed fetch wrappers for all backend endpoints.
-6. CORS enabled in FastAPI for `localhost:3000`.
+6. Use a same-origin Next.js `/api` rewrite to the configured FastAPI origin (CORS for `localhost:3000` already exists).
 
 ### Acceptance criteria
 
 - `/investigations` renders a list populated from the backend.
 - `/investigations/:id` renders all sections without runtime errors.
-- Status badge reflects live investigation state (polling every 3s).
+- Status badge reflects live investigation state (polling every 3s while active).
 - Approve/Reject buttons call the correct API endpoints.
 
 ---

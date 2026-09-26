@@ -261,33 +261,46 @@ async def test_list_hypotheses_for_unknown_investigation_returns_404(
     assert response.status_code == 404
 
 
-# ── Stubs return 501 ──────────────────────────────────────────────────────────
+# ── CP-09 endpoints are now live (no longer stubs) ───────────────────────────
+# These endpoints were 501 in CP-06; they are fully implemented in CP-09.
+# Detailed acceptance tests live in test_api_cp09.py and test_api_pr.py.
+# Quick smoke-checks here to ensure the CP-06 suite still passes cleanly.
 
 
 @pytest.mark.asyncio
-async def test_approve_stub_returns_501(client_with_db: AsyncClient, db_engine):
+async def test_approve_requires_waiting_for_review_status(
+    client_with_db: AsyncClient, db_engine
+):
+    """approve on a CREATED investigation returns 409 (not 501)."""
     inv_id = await _seed_investigation(db_engine)
     response = await client_with_db.post(f"/api/investigations/{inv_id}/approve")
-    assert response.status_code == 501
+    assert response.status_code == 409  # CREATED is not approvable
 
 
 @pytest.mark.asyncio
-async def test_reject_stub_returns_501(client_with_db: AsyncClient, db_engine):
+async def test_reject_requires_waiting_for_review_status(
+    client_with_db: AsyncClient, db_engine
+):
+    """reject on a CREATED investigation returns 409 (not 501)."""
     inv_id = await _seed_investigation(db_engine)
     response = await client_with_db.post(f"/api/investigations/{inv_id}/reject")
-    assert response.status_code == 501
+    assert response.status_code == 409  # CREATED is not rejectable
 
 
 @pytest.mark.asyncio
-async def test_pull_request_stub_returns_501(client_with_db: AsyncClient, db_engine):
-    """Stub — will enforce APPROVED status gate in CP-09."""
+async def test_pull_request_requires_approved_status(client_with_db: AsyncClient, db_engine):
+    """pull-request enforces APPROVED gate — CREATED returns 409 (not 501)."""
     inv_id = await _seed_investigation(db_engine)
     response = await client_with_db.post(f"/api/investigations/{inv_id}/pull-request")
-    assert response.status_code == 501
+    assert response.status_code == 409  # CREATED is not APPROVED
 
 
 @pytest.mark.asyncio
-async def test_events_stub_returns_501(client_with_db: AsyncClient, db_engine):
+async def test_events_returns_empty_list_for_new_investigation(
+    client_with_db: AsyncClient, db_engine
+):
+    """events endpoint is live — returns empty list for a fresh investigation."""
     inv_id = await _seed_investigation(db_engine)
     response = await client_with_db.get(f"/api/investigations/{inv_id}/events")
-    assert response.status_code == 501
+    assert response.status_code == 200
+    assert response.json() == []
