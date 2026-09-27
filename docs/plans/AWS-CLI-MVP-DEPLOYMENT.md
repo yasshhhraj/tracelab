@@ -1,6 +1,6 @@
 # TraceLab MVP deployment with the AWS CLI
 
-**Status (2026-09-27):** Domain-free staging is running in `us-east-1`: EC2, private encrypted RDS, ECR images, a local-only gateway, and SSM access. The `tracelab-mvp-account-100` budget is an alert, not a spending cap. Public HTTPS, Cognito, live Bedrock/Jira/GitHub validation, and the draft-PR acceptance test remain pending.  
+**Status (2026-09-27): Retired.** The domain-free AWS staging stack, ECR images, app secret, budget alert, and final RDS snapshot were deleted at the owner's request. The old SSM tunnel and URLs no longer work. Follow the [Vercel/Railway/Supabase deployment plan](VERCEL-RAILWAY-SUPABASE-MIGRATION.md). The rest of this file is historical AWS design and validation evidence, not instructions to recreate those resources.
 **Scope:** A private, single-instance MVP with a real database and live Bedrock/Jira/GitHub integration. The live draft-PR acceptance test remains the separate [CP-12 follow-up](CP-12-live-validation-follow-up.md).  
 **Default region:** `us-east-1`, matching the currently configured Bedrock Mantle endpoint. Replace every example domain, account ID, repository and budget value before executing a command.
 
