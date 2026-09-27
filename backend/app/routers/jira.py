@@ -26,6 +26,7 @@ from app.integrations.jira_client import (
     JiraNotFoundError,
 )
 from app.orchestrator import run_investigation
+from app.repository_access import permitted_repository
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,7 @@ async def _create_investigation_from_issue(
 
     Raises HTTPException on Jira errors; callers may catch before this point.
     """
+    repository = permitted_repository(repository)
     client = JiraClient()
     agent = IntakeAgent()
 
@@ -144,8 +146,7 @@ async def import_jira_issue(
         raise HTTPException(
             status_code=422,
             detail=(
-                "repository is required (supply in request body or set "
-                "TARGET_REPOSITORY env var)"
+                "repository is required (supply in request body or set TARGET_REPOSITORY env var)"
             ),
         )
 

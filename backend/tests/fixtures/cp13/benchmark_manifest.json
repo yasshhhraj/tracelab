@@ -1,0 +1,12 @@
+[
+  {"id":"logic-pages","category":"logic","cause":"Floor division drops a partial page","expected_source":"subject.py"},
+  {"id":"logic-guest","category":"logic","cause":"Guest access uses an overbroad truthiness check","expected_source":"subject.py"},
+  {"id":"logic-range","category":"logic","cause":"The inclusive range omits its last element","expected_source":"subject.py"},
+  {"id":"persistence-once","category":"data/persistence","cause":"A repeated idempotency key inserts another row","expected_source":"subject.py"},
+  {"id":"persistence-overdraft","category":"data/persistence","cause":"An overdraft updates the persisted balance","expected_source":"subject.py"},
+  {"id":"concurrency-counter","category":"concurrency","cause":"Concurrent increments overwrite one another","expected_source":"subject.py"},
+  {"id":"concurrency-review","category":"concurrency","cause":"Concurrent review creation lacks a unique input-hash constraint","expected_source":"review_repository.py"},
+  {"id":"regression-trim","category":"regression","cause":"Normalization strips meaningful trailing spaces","expected_source":"subject.py"},
+  {"id":"regression-sort","category":"regression","cause":"Results are sorted ascending instead of descending","expected_source":"subject.py"},
+  {"id":"flaky-delivery","category":"flaky","cause":"Every fifth delivery is dropped","expected_source":"subject.py"}
+]

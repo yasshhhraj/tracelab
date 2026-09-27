@@ -1,0 +1,48 @@
+services:
+  api:
+    image: ${TRACELAB_API_IMAGE:?Set TRACELAB_API_IMAGE to a pinned ECR image digest}
+    restart: unless-stopped
+    user: "${TRACELAB_UID:-1000}:${TRACELAB_GID:-1000}"
+    cpus: "1.5"
+    mem_limit: 2g
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    env_file:
+      - ${TRACELAB_ENV_FILE:?Set TRACELAB_ENV_FILE to a protected host file}
+    environment:
+      ENVIRONMENT: production
+      TARGET_REPOSITORY: /srv/tracelab/repos/target
+    ports:
+      - "${TRACELAB_BIND_IP:-0.0.0.0}:${TRACELAB_API_HOST_PORT:-8000}:8000"
+    volumes:
+      - ${TRACELAB_REPOS_DIR:?Set TRACELAB_REPOS_DIR to the host repo parent}:/srv/tracelab/repos
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  frontend:
+    image: ${TRACELAB_FRONTEND_IMAGE:?Set TRACELAB_FRONTEND_IMAGE to a pinned ECR image digest}
+    restart: unless-stopped
+    cpus: "0.5"
+    mem_limit: 1g
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    ports:
+      - "${TRACELAB_BIND_IP:-0.0.0.0}:${TRACELAB_FRONTEND_HOST_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/investigations').then(r => {if (!r.ok) process.exit(1)}).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

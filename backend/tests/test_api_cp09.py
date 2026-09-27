@@ -208,9 +208,7 @@ async def test_reject_unknown_investigation_returns_404(client_with_db: AsyncCli
 
 
 @pytest.mark.asyncio
-async def test_reject_wrong_status_returns_409(
-    client_with_db: AsyncClient, db_engine: AsyncEngine
-):
+async def test_reject_wrong_status_returns_409(client_with_db: AsyncClient, db_engine: AsyncEngine):
     """Rejecting a CREATED investigation returns 409."""
     inv_id = await _make_investigation(db_engine, InvestigationStatus.CREATED)
     resp = await client_with_db.post(f"/api/investigations/{inv_id}/reject")

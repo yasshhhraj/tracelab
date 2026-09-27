@@ -7,8 +7,7 @@ No real GitHub credentials or network access required.
 
 import logging
 from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -20,7 +19,6 @@ from app.integrations.github_client import (
     GitHubNotFoundError,
 )
 from app.tools.executor import CommandResult
-
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -91,7 +89,8 @@ async def test_push_branch_ok(tmp_path: Path):
         side_effect=[push_result, sha_result],
     ) as mock_run:
         result = await client.push_branch(
-            owner="org", repo="myapp",
+            owner="org",
+            repo="myapp",
             branch="ai-debug/PVS-421-h1",
             local_repo=tmp_path,
         )
@@ -102,9 +101,12 @@ async def test_push_branch_ok(tmp_path: Path):
     first_call_args = mock_run.call_args_list[0][0][0]  # argv list
     assert first_call_args[0] == "git"
     assert first_call_args[1] == "push"
-    # Token embedded in URL, not as a standalone arg after "push"
+    # Git arguments and remote URL must never contain a token.
     push_url = first_call_args[2]
-    assert "supersecret_token" in push_url
+    assert push_url == "https://github.com/org/myapp.git"
+    assert "supersecret_token" not in str(first_call_args)
+    assert mock_run.call_args_list[0].kwargs["env"]["TRACELAB_GITHUB_TOKEN"] == "supersecret_token"
+    assert mock_run.call_args_list[0].kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
 
 
 @pytest.mark.asyncio
@@ -116,13 +118,15 @@ async def test_push_branch_auth_failure(tmp_path: Path):
     )
     client = GitHubClient(token="bad_token")
 
-    with patch(
-        "app.integrations.github_client.run_command",
-        new_callable=AsyncMock,
-        return_value=result,
+    with (
+        patch(
+            "app.integrations.github_client.run_command",
+            new_callable=AsyncMock,
+            return_value=result,
+        ),
+        pytest.raises(GitHubAuthError),
     ):
-        with pytest.raises(GitHubAuthError):
-            await client.push_branch("org", "repo", "branch", tmp_path)
+        await client.push_branch("org", "repo", "branch", tmp_path)
 
 
 @pytest.mark.asyncio
@@ -134,13 +138,15 @@ async def test_push_branch_repo_not_found(tmp_path: Path):
     )
     client = GitHubClient(token="token123")
 
-    with patch(
-        "app.integrations.github_client.run_command",
-        new_callable=AsyncMock,
-        return_value=result,
+    with (
+        patch(
+            "app.integrations.github_client.run_command",
+            new_callable=AsyncMock,
+            return_value=result,
+        ),
+        pytest.raises(GitHubNotFoundError),
     ):
-        with pytest.raises(GitHubNotFoundError):
-            await client.push_branch("org", "missing-repo", "branch", tmp_path)
+        await client.push_branch("org", "missing-repo", "branch", tmp_path)
 
 
 @pytest.mark.asyncio
@@ -152,13 +158,15 @@ async def test_push_branch_other_failure(tmp_path: Path):
     )
     client = GitHubClient(token="token123")
 
-    with patch(
-        "app.integrations.github_client.run_command",
-        new_callable=AsyncMock,
-        return_value=result,
+    with (
+        patch(
+            "app.integrations.github_client.run_command",
+            new_callable=AsyncMock,
+            return_value=result,
+        ),
+        pytest.raises(GitHubClientError),
     ):
-        with pytest.raises(GitHubClientError):
-            await client.push_branch("org", "repo", "branch", tmp_path)
+        await client.push_branch("org", "repo", "branch", tmp_path)
 
 
 @pytest.mark.asyncio
@@ -167,13 +175,15 @@ async def test_push_branch_timeout(tmp_path: Path):
     result = _make_command_result(exit_code=-1, timed_out=True)
     client = GitHubClient(token="token123")
 
-    with patch(
-        "app.integrations.github_client.run_command",
-        new_callable=AsyncMock,
-        return_value=result,
+    with (
+        patch(
+            "app.integrations.github_client.run_command",
+            new_callable=AsyncMock,
+            return_value=result,
+        ),
+        pytest.raises(GitHubClientError, match="timed out"),
     ):
-        with pytest.raises(GitHubClientError, match="timed out"):
-            await client.push_branch("org", "repo", "branch", tmp_path)
+        await client.push_branch("org", "repo", "branch", tmp_path)
 
 
 def test_push_branch_token_not_in_log(tmp_path: Path, caplog):
@@ -190,6 +200,39 @@ def test_push_branch_token_not_in_log(tmp_path: Path, caplog):
 
 
 @pytest.mark.asyncio
+async def test_clone_apply_and_push_stages_generated_regression_test():
+    """The draft-PR commit must include a newly added regression test."""
+    diff = (
+        "diff --git a/source.py b/source.py\n"
+        "--- a/source.py\n+++ b/source.py\n@@ -1 +1 @@\n-old\n+fixed\n"
+        "diff --git a/tests/test_generated.py b/tests/test_generated.py\n"
+        "--- /dev/null\n+++ b/tests/test_generated.py\n@@ -0,0 +1 @@\n+assert True\n"
+    )
+    client = GitHubClient(token="demo-token")
+    with (
+        patch(
+            "app.integrations.github_client.run_command",
+            new_callable=AsyncMock,
+            return_value=_make_command_result(),
+        ) as mock_run,
+        patch.object(client, "push_branch", new_callable=AsyncMock, return_value="abc123"),
+    ):
+        sha = await client.clone_apply_and_push(
+            "demo", "review", "ai-debug/DEMO-1-h1", "main", diff, "Fix bug"
+        )
+    assert sha == "abc123"
+    commands = [entry.args[0] for entry in mock_run.call_args_list]
+    assert any(command[:4] == ["git", "clone", "--branch", "main"] for command in commands)
+    assert all("demo-token" not in str(command) for command in commands)
+    clone_call = next(entry for entry in mock_run.call_args_list if entry.args[0][1] == "clone")
+    assert clone_call.kwargs["env"]["TRACELAB_GITHUB_TOKEN"] == "demo-token"
+    assert ["git", "add", "--", "source.py", "tests/test_generated.py"] in commands
+
+
+# ── create_draft_pr ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
 async def test_create_draft_pr_ok():
     """Successful PR creation returns html_url; payload has draft=True."""
     pr_data = {"html_url": "https://github.com/org/repo/pull/42", "number": 42}
@@ -200,7 +243,8 @@ async def test_create_draft_pr_ok():
 
     with patch("app.integrations.github_client.httpx.AsyncClient", return_value=mock_client):
         url = await client.create_draft_pr(
-            owner="org", repo="repo",
+            owner="org",
+            repo="repo",
             branch="ai-debug/PVS-421-h1",
             base="main",
             title="Fix PVS-421",
@@ -228,9 +272,11 @@ async def test_create_draft_pr_conflict():
     client = GitHubClient(token="token123")
     mock_client = _make_async_client([mock_resp])
 
-    with patch("app.integrations.github_client.httpx.AsyncClient", return_value=mock_client):
-        with pytest.raises(GitHubConflictError):
-            await client.create_draft_pr("org", "repo", "branch", "main", "T", "B")
+    with (
+        patch("app.integrations.github_client.httpx.AsyncClient", return_value=mock_client),
+        pytest.raises(GitHubConflictError),
+    ):
+        await client.create_draft_pr("org", "repo", "branch", "main", "T", "B")
 
 
 @pytest.mark.asyncio
@@ -240,9 +286,11 @@ async def test_create_draft_pr_auth():
     client = GitHubClient(token="bad_token")
     mock_client = _make_async_client([mock_resp])
 
-    with patch("app.integrations.github_client.httpx.AsyncClient", return_value=mock_client):
-        with pytest.raises(GitHubAuthError):
-            await client.create_draft_pr("org", "repo", "branch", "main", "T", "B")
+    with (
+        patch("app.integrations.github_client.httpx.AsyncClient", return_value=mock_client),
+        pytest.raises(GitHubAuthError),
+    ):
+        await client.create_draft_pr("org", "repo", "branch", "main", "T", "B")
 
 
 @pytest.mark.asyncio
@@ -252,9 +300,11 @@ async def test_create_draft_pr_not_found():
     client = GitHubClient(token="token123")
     mock_client = _make_async_client([mock_resp])
 
-    with patch("app.integrations.github_client.httpx.AsyncClient", return_value=mock_client):
-        with pytest.raises(GitHubNotFoundError):
-            await client.create_draft_pr("org", "repo", "branch", "main", "T", "B")
+    with (
+        patch("app.integrations.github_client.httpx.AsyncClient", return_value=mock_client),
+        pytest.raises(GitHubNotFoundError),
+    ):
+        await client.create_draft_pr("org", "repo", "branch", "main", "T", "B")
 
 
 # ── get_or_create_ref ──────────────────────────────────────────────────────────
@@ -270,8 +320,6 @@ async def test_get_or_create_ref_creates_new():
     )
 
     client = GitHubClient(token="token123")
-
-    call_responses: list[MagicMock] = []
 
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)

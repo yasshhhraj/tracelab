@@ -682,6 +682,8 @@ Already enforced in CP-09 (`status == APPROVED`).
 
 ## CP-13 — Seeded Demo Benchmark + End-to-End Smoke Test
 
+**Detailed implementation plan:** [CP-13 — Seeded Demo Benchmark and End-to-End Smoke Test](CP-13-seeded-demo-benchmark.md).
+
 **Goal:** A reproducible, self-contained demo benchmark that exercises the full system with the hero demo scenario from PRD §25.  
 **Deployable state:** `make demo` runs end-to-end, resolves the seeded bug, produces a diagnosis, creates a mock PR.
 

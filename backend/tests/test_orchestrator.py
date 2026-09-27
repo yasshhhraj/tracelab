@@ -157,9 +157,7 @@ async def test_run_investigation_persists_three_hypotheses(
 
 
 @pytest.mark.asyncio
-async def test_run_investigation_status_transitions(
-    db_engine, session_factory, tmp_path: Path
-):
+async def test_run_investigation_status_transitions(db_engine, session_factory, tmp_path: Path):
     """
     AC-4: after CP-08, investigation reaches WAITING_FOR_REVIEW.
     """
@@ -186,9 +184,7 @@ async def test_run_investigation_status_transitions(
 
 
 @pytest.mark.asyncio
-async def test_run_investigation_partial_agent_failure(
-    db_engine, session_factory, tmp_path: Path
-):
+async def test_run_investigation_partial_agent_failure(db_engine, session_factory, tmp_path: Path):
     """AC-5: one agent raises → investigation still VERIFYING; that hypothesis BLOCKED."""
     inv_id = await _seed_investigation(session_factory, tmp_path)
 
@@ -312,12 +308,8 @@ async def test_run_investigation_persists_experiments_and_events(
         ["git", "-C", str(tmp_path), "config", "user.name", "Test"],
         capture_output=True,
     )
-    subprocess.run(
-        ["git", "-C", str(tmp_path), "add", "."], capture_output=True
-    )
-    subprocess.run(
-        ["git", "-C", str(tmp_path), "commit", "-m", "init"], capture_output=True
-    )
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "init"], capture_output=True)
 
     from app.verification.engine import VerificationEngine
 
@@ -462,9 +454,7 @@ async def test_orchestrator_skips_blocked_hypotheses_in_verification(
 
 
 @pytest.mark.asyncio
-async def test_post_jira_comment_loads_hypotheses_before_counting(
-    session_factory, tmp_path: Path
-):
+async def test_post_jira_comment_loads_hypotheses_before_counting(session_factory, tmp_path: Path):
     """The async Jira feedback path must not lazy-load hypotheses."""
     inv_id = await _seed_investigation(session_factory, tmp_path)
     async with session_factory() as session:
@@ -497,7 +487,9 @@ async def test_post_jira_comment_loads_hypotheses_before_counting(
     with (
         patch("app.orchestrator.settings.jira_base_url", "https://example.atlassian.net"),
         patch("app.orchestrator.settings.jira_api_token", "test-token"),
-        patch("app.integrations.jira_client.JiraClient.add_comment", new_callable=AsyncMock) as add_comment,
+        patch(
+            "app.integrations.jira_client.JiraClient.add_comment", new_callable=AsyncMock
+        ) as add_comment,
     ):
         await _post_jira_comment(session_factory, inv_id)
 

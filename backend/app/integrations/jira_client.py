@@ -211,15 +211,10 @@ class JiraClient:
 
         comments_raw = (fields.get("comment") or {}).get("comments", [])
         comments = [
-            _adf_to_text(c.get("body") or {}).strip()
-            for c in comments_raw
-            if c.get("body")
+            _adf_to_text(c.get("body") or {}).strip() for c in comments_raw if c.get("body")
         ]
 
-        attachments = [
-            a.get("filename", "")
-            for a in (fields.get("attachment") or [])
-        ]
+        attachments = [a.get("filename", "") for a in (fields.get("attachment") or [])]
 
         return JiraIssue(
             issue_id=data.get("key", issue_id),

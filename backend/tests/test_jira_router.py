@@ -8,7 +8,7 @@ JiraClient and IntakeAgent are patched with AsyncMock.
 import hashlib
 import hmac
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -18,12 +18,10 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from app.db.models import Investigation as InvestigationORM
 from app.integrations.jira_client import (
     JiraAuthError,
-    JiraClientError,
     JiraIssue,
     JiraNotFoundError,
 )
 from app.schemas.bug_context import BugContext
-
 
 # ── Fixtures / helpers ─────────────────────────────────────────────────────────
 
@@ -178,9 +176,7 @@ async def test_import_not_found(client_with_db: AsyncClient):
         patch("app.routers.jira.JiraClient") as MockClient,
         patch("app.routers.jira.IntakeAgent"),
     ):
-        MockClient.return_value.get_issue = AsyncMock(
-            side_effect=JiraNotFoundError("Not found")
-        )
+        MockClient.return_value.get_issue = AsyncMock(side_effect=JiraNotFoundError("Not found"))
         response = await client_with_db.post(
             "/api/jira/import/MISSING-1",
             json={"repository": "/tmp/test-repo"},
@@ -196,9 +192,7 @@ async def test_import_auth_error(client_with_db: AsyncClient):
         patch("app.routers.jira.JiraClient") as MockClient,
         patch("app.routers.jira.IntakeAgent"),
     ):
-        MockClient.return_value.get_issue = AsyncMock(
-            side_effect=JiraAuthError("Bad credentials")
-        )
+        MockClient.return_value.get_issue = AsyncMock(side_effect=JiraAuthError("Bad credentials"))
         response = await client_with_db.post(
             "/api/jira/import/PVS-421",
             json={"repository": "/tmp/test-repo"},
@@ -234,7 +228,9 @@ async def test_webhook_ready_for_ai(client_with_db: AsyncClient):
     with (
         patch("app.routers.jira.settings.jira_webhook_secret", ""),
         patch("app.routers.jira.settings.target_repository", "/tmp/test-repo"),
-        patch("app.routers.jira._webhook_create_investigation", new_callable=AsyncMock) as mock_create,
+        patch(
+            "app.routers.jira._webhook_create_investigation", new_callable=AsyncMock
+        ) as mock_create,
     ):
         response = await client_with_db.post(
             "/api/jira/webhook",
@@ -257,7 +253,9 @@ async def test_webhook_other_status(client_with_db: AsyncClient):
     with (
         patch("app.routers.jira.settings.jira_webhook_secret", ""),
         patch("app.routers.jira.settings.target_repository", "/tmp/test-repo"),
-        patch("app.routers.jira._webhook_create_investigation", new_callable=AsyncMock) as mock_create,
+        patch(
+            "app.routers.jira._webhook_create_investigation", new_callable=AsyncMock
+        ) as mock_create,
     ):
         response = await client_with_db.post(
             "/api/jira/webhook",

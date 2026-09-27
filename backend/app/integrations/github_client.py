@@ -4,9 +4,9 @@ GitHub REST API v3 client — CP-12
 Credentials are read from settings at construction time and NEVER placed in
 any prompt, log line, or AgentContext (AGENTS.md).
 
-Push operations use `git push` through the allowlisted tool layer with the
-token injected into the remote URL — the token is never passed as a plain CLI
-argument (would appear in process listings) and never stored in any DB column.
+Push and clone operations use an HTTPS URL without credentials. Git obtains
+the token through a process-local askpass helper, never through argv or a
+persisted remote URL.
 
 Usage::
 
@@ -81,22 +81,23 @@ class GitHubClient:
     def _url(self, path: str) -> str:
         return f"{self._api_url}/{path.lstrip('/')}"
 
+    def _git_auth_env(self) -> dict[str, str]:
+        return {
+            "GIT_ASKPASS": str(Path(__file__).with_name("git_askpass.sh").resolve()),
+            "GIT_TERMINAL_PROMPT": "0",
+            "TRACELAB_GITHUB_TOKEN": self._token,
+        }
+
     @staticmethod
     def _raise_for_status(response: httpx.Response) -> None:
         if response.status_code in (401, 403):
-            raise GitHubAuthError(
-                f"GitHub authentication failed (HTTP {response.status_code})"
-            )
+            raise GitHubAuthError(f"GitHub authentication failed (HTTP {response.status_code})")
         if response.status_code == 404:
-            raise GitHubNotFoundError(
-                f"GitHub resource not found (HTTP 404): {response.url}"
-            )
+            raise GitHubNotFoundError(f"GitHub resource not found (HTTP 404): {response.url}")
         if response.status_code in (409, 422):
             body = response.text.lower()
             if "already exists" in body or "reference already exists" in body:
-                raise GitHubConflictError(
-                    f"Branch or PR already exists: {response.text[:200]}"
-                )
+                raise GitHubConflictError(f"Branch or PR already exists: {response.text[:200]}")
             raise GitHubClientError(
                 f"GitHub conflict/validation error (HTTP {response.status_code}): "
                 f"{response.text[:200]}"
@@ -119,8 +120,8 @@ class GitHubClient:
         """
         Push a local branch to GitHub.
 
-        The token is injected into the remote URL, NOT passed as a plain CLI
-        argument. The URL is constructed inside this method and never stored.
+        Git receives the token through GIT_ASKPASS. The remote URL and command
+        arguments contain no credential.
 
         Returns the HEAD commit SHA after a successful push.
 
@@ -130,14 +131,13 @@ class GitHubClient:
             GitHubClientError    — any other push failure
         """
         _LOGGER.info("Pushing branch '%s' to %s/%s", branch, owner, repo)
-        # SECURITY: token is embedded in the URL string — not logged, not stored.
-        remote_url = f"https://{self._token}@github.com/{owner}/{repo}.git"
+        remote_url = f"https://github.com/{owner}/{repo}.git"
 
         cmd = ["git", "push", remote_url, f"{branch}:{branch}"]
         if force:
             cmd.insert(2, "--force")
 
-        result = await run_command(cmd, cwd=local_repo)
+        result = await run_command(cmd, cwd=local_repo, env=self._git_auth_env())
 
         if result.exit_code != 0 or result.timed_out:
             stderr_lower = result.stderr.lower()
@@ -147,24 +147,18 @@ class GitHubClient:
                 or "credentials" in stderr_lower
             )
             if auth_indicators:
-                raise GitHubAuthError(
-                    f"GitHub push authentication failure for {owner}/{repo}"
-                )
-            not_found = (
-                "not found" in stderr_lower
-                or ("repository" in stderr_lower and "404" in result.stderr)
+                raise GitHubAuthError(f"GitHub push authentication failure for {owner}/{repo}")
+            not_found = "not found" in stderr_lower or (
+                "repository" in stderr_lower and "404" in result.stderr
             )
             if not_found:
-                raise GitHubNotFoundError(
-                    f"GitHub repository not found: {owner}/{repo}"
-                )
+                raise GitHubNotFoundError(f"GitHub repository not found: {owner}/{repo}")
             if result.timed_out:
                 raise GitHubClientError(
                     f"git push timed out for branch '{branch}' on {owner}/{repo}"
                 )
             raise GitHubClientError(
-                f"git push failed for branch '{branch}' on {owner}/{repo} "
-                f"(exit {result.exit_code})"
+                f"git push failed for branch '{branch}' on {owner}/{repo} (exit {result.exit_code})"
             )
 
         # Read HEAD SHA
@@ -240,9 +234,7 @@ class GitHubClient:
             GitHubNotFoundError  — repo not found
             GitHubClientError    — any other API error
         """
-        _LOGGER.info(
-            "Creating draft PR in %s/%s: '%s' ← '%s'", owner, repo, base, branch
-        )
+        _LOGGER.info("Creating draft PR in %s/%s: '%s' ← '%s'", owner, repo, base, branch)
         url = self._url(f"repos/{owner}/{repo}/pulls")
         payload: dict[str, Any] = {
             "title": title,
@@ -278,20 +270,19 @@ class GitHubClient:
 
         Flow:
             1. Create TemporaryDirectory.
-            2. git clone https://{token}@github.com/{owner}/{repo}.git ./repo
+            2. git clone --branch {base_branch} https://github.com/{owner}/{repo}.git ./repo
             3. git checkout -b {branch}
             4. Write diff to a temp file; git apply <file>
-            5. git commit -am "{commit_message}"
+            5. Stage paths from the diff and commit
             6. git push {remote_url} {branch}:{branch}
 
         Returns the HEAD commit SHA.
 
         The temp directory is always cleaned up in a finally block.
-        The token URL is constructed locally and never stored.
+        The token is supplied to Git only through GIT_ASKPASS.
         """
         _LOGGER.info("clone_apply_and_push: %s/%s → branch '%s'", owner, repo, branch)
-        # SECURITY: token in URL string — not logged, not stored on disk.
-        remote_url = f"https://{self._token}@github.com/{owner}/{repo}.git"
+        remote_url = f"https://github.com/{owner}/{repo}.git"
 
         tmp = tempfile.mkdtemp(prefix="tracelab-gh-")
         try:
@@ -300,13 +291,13 @@ class GitHubClient:
 
             # 1. Clone
             clone_result = await run_command(
-                ["git", "clone", remote_url, str(repo_dir)],
+                ["git", "clone", "--branch", base_branch, remote_url, str(repo_dir)],
                 cwd=Path(tmp),
+                env=self._git_auth_env(),
             )
             if clone_result.exit_code != 0 or clone_result.timed_out:
                 raise GitHubClientError(
-                    f"git clone failed for {owner}/{repo} "
-                    f"(exit {clone_result.exit_code})"
+                    f"git clone failed for {owner}/{repo} (exit {clone_result.exit_code})"
                 )
 
             # 2. Checkout new branch from base
@@ -315,9 +306,7 @@ class GitHubClient:
                 cwd=repo_dir,
             )
             if checkout_result.exit_code != 0:
-                raise GitHubClientError(
-                    f"git checkout -b failed: {checkout_result.stderr[:200]}"
-                )
+                raise GitHubClientError(f"git checkout -b failed: {checkout_result.stderr[:200]}")
 
             # 3. Write diff to temp file and apply
             if diff.strip():
@@ -328,9 +317,7 @@ class GitHubClient:
                     cwd=repo_dir,
                 )
                 if apply_result.exit_code != 0:
-                    raise GitHubClientError(
-                        f"git apply failed: {apply_result.stderr[:300]}"
-                    )
+                    raise GitHubClientError(f"git apply failed: {apply_result.stderr[:300]}")
 
             # 4. Commit
             # Configure git identity for the commit (required in CI/containers)
@@ -342,14 +329,17 @@ class GitHubClient:
                 ["git", "config", "user.name", "TraceLab"],
                 cwd=repo_dir,
             )
-            commit_result = await run_command(
-                ["git", "commit", "-am", commit_message],
-                cwd=repo_dir,
+            changed_paths = sorted(
+                {line[6:] for line in diff.splitlines() if line.startswith(("+++ b/", "--- a/"))}
             )
+            if not changed_paths:
+                raise GitHubClientError("Patch contains no changed files")
+            stage_result = await run_command(["git", "add", "--", *changed_paths], cwd=repo_dir)
+            if stage_result.exit_code != 0:
+                raise GitHubClientError(f"git add failed: {stage_result.stderr[:200]}")
+            commit_result = await run_command(["git", "commit", "-m", commit_message], cwd=repo_dir)
             if commit_result.exit_code != 0:
-                raise GitHubClientError(
-                    f"git commit failed: {commit_result.stderr[:200]}"
-                )
+                raise GitHubClientError(f"git commit failed: {commit_result.stderr[:200]}")
 
             # 5. Push
             sha = await self.push_branch(
@@ -361,6 +351,7 @@ class GitHubClient:
             return sha
 
         finally:
-            # Always clean up — temp dir contains a credential-bearing clone.
+            # Always clean up the fresh clone and patch.
             import shutil
+
             shutil.rmtree(tmp, ignore_errors=True)

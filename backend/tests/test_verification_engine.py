@@ -166,9 +166,7 @@ def _make_bug_context(error_type: str = "deterministic") -> BugContext:
 
 
 @pytest.mark.asyncio
-async def test_verify_correct_hypothesis_is_verified(
-    db_engine, session_factory, demo_repo: Path
-):
+async def test_verify_correct_hypothesis_is_verified(db_engine, session_factory, demo_repo: Path):
     """AC-1: correct hypothesis on seeded bug repo → VERIFIED."""
     inv_id = await _seed_investigation(session_factory)
     hyp_id = await _seed_hypothesis(
@@ -209,9 +207,7 @@ async def test_verify_correct_hypothesis_is_verified(
 
 
 @pytest.mark.asyncio
-async def test_verify_wrong_hypothesis_is_rejected(
-    db_engine, session_factory, demo_repo: Path
-):
+async def test_verify_wrong_hypothesis_is_rejected(db_engine, session_factory, demo_repo: Path):
     """AC-2: wrong-file patch doesn't fix the bug → post-fix run still FAIL → REJECTED."""
     inv_id = await _seed_investigation(session_factory)
     hyp_id = await _seed_hypothesis(
@@ -239,9 +235,7 @@ async def test_verify_wrong_hypothesis_is_rejected(
 
 
 @pytest.mark.asyncio
-async def test_verify_inconclusive_when_pre_fix_passes(
-    db_engine, session_factory, demo_repo: Path
-):
+async def test_verify_inconclusive_when_pre_fix_passes(db_engine, session_factory, demo_repo: Path):
     """AC-3: pre-fix test already passes → INCONCLUSIVE (AGENTS.md core rule)."""
     inv_id = await _seed_investigation(session_factory)
     # reproduction_plan uses the concurrent test (FAILS before fix) so step 1 passes.
@@ -282,9 +276,7 @@ async def test_verify_inconclusive_when_pre_fix_passes(
 
 
 @pytest.mark.asyncio
-async def test_verify_blocked_after_max_patch_attempts(
-    db_engine, session_factory, demo_repo: Path
-):
+async def test_verify_blocked_after_max_patch_attempts(db_engine, session_factory, demo_repo: Path):
     """AC-4: invalid patch fails, exhausts max_patch_attempts → BLOCKED."""
     from app.config import settings
 
@@ -318,9 +310,7 @@ async def test_verify_blocked_after_max_patch_attempts(
 
 
 @pytest.mark.asyncio
-async def test_verify_persists_test_evidence(
-    db_engine, session_factory, demo_repo: Path
-):
+async def test_verify_persists_test_evidence(db_engine, session_factory, demo_repo: Path):
     """AC-6: after VERIFIED, TestEvidence row has correct result fields."""
     inv_id = await _seed_investigation(session_factory)
     hyp_id = await _seed_hypothesis(
@@ -354,9 +344,7 @@ async def test_verify_persists_test_evidence(
 
 
 @pytest.mark.asyncio
-async def test_verify_persists_experiments(
-    db_engine, session_factory, demo_repo: Path
-):
+async def test_verify_persists_experiments(db_engine, session_factory, demo_repo: Path):
     """AC-7: Experiment rows are persisted for each verification step."""
     inv_id = await _seed_investigation(session_factory)
     hyp_id = await _seed_hypothesis(
@@ -377,9 +365,7 @@ async def test_verify_persists_experiments(
     )
 
     async with session_factory() as session:
-        result = await session.execute(
-            select(Experiment).where(Experiment.hypothesis_id == hyp_id)
-        )
+        result = await session.execute(select(Experiment).where(Experiment.hypothesis_id == hyp_id))
         experiments = result.scalars().all()
 
     # Should have at least: reproduce, pre_fix_run, git_apply_patch, post_fix_run, existing_suite

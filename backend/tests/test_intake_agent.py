@@ -14,7 +14,6 @@ from app.agents.intake_agent import IntakeAgent
 from app.integrations.jira_client import JiraIssue
 from app.schemas.bug_context import BugContext
 
-
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
@@ -139,7 +138,9 @@ async def test_run_intermittent_issue():
         "stack_trace": None,
     }
     issue = _make_issue(
-        description="Race condition between idempotency check and insert. Sometimes two rows appear."
+        description=(
+            "Race condition between idempotency check and insert. Sometimes two rows appear."
+        )
     )
     agent = IntakeAgent()
 
@@ -196,7 +197,11 @@ async def test_run_regression_issue():
 @pytest.mark.asyncio
 async def test_run_extracts_stack_trace():
     """Stack trace in description is captured in bug_context.stack_trace."""
-    stack = "Traceback (most recent call last):\n  File 'review.py', line 42, in create\nValueError: duplicate key"
+    stack = (
+        "Traceback (most recent call last):\n"
+        "  File 'review.py', line 42, in create\n"
+        "ValueError: duplicate key"
+    )
     llm_args = {
         "symptom": "ValueError: duplicate key on review creation",
         "expected": "Review created successfully",
@@ -266,14 +271,16 @@ async def test_api_key_not_in_message():
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.raise_for_status = MagicMock()
-    mock_response.json.return_value = _make_llm_response({
-        "symptom": "s",
-        "expected": "e",
-        "actual": "a",
-        "affected_area": "x",
-        "error_type": "deterministic",
-        "known_evidence": [],
-    })
+    mock_response.json.return_value = _make_llm_response(
+        {
+            "symptom": "s",
+            "expected": "e",
+            "actual": "a",
+            "affected_area": "x",
+            "error_type": "deterministic",
+            "known_evidence": [],
+        }
+    )
 
     async def capture_post(url, *, headers, json, **kwargs):
         captured_payloads.append(json)
@@ -285,12 +292,12 @@ async def test_api_key_not_in_message():
     mock_client.post = capture_post  # type: ignore[assignment]
 
     api_key = settings.llm_api_key or "test-key-must-not-appear"
-    with patch("app.agents.intake_agent.httpx.AsyncClient", return_value=mock_client):
-        with patch.object(settings, "llm_api_key", api_key):
-            await agent.run(issue, "/repo", "main")
+    with (
+        patch("app.agents.intake_agent.httpx.AsyncClient", return_value=mock_client),
+        patch.object(settings, "llm_api_key", api_key),
+    ):
+        await agent.run(issue, "/repo", "main")
 
     for payload in captured_payloads:
         payload_str = json.dumps(payload)
-        assert api_key not in payload_str, (
-            f"LLM API key leaked into request payload"
-        )
+        assert api_key not in payload_str, "LLM API key leaked into request payload"

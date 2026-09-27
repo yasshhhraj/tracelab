@@ -4,10 +4,7 @@ Tests for app/integrations/pr_body.py — CP-12
 Pure unit tests, no mocking needed.
 """
 
-import pytest
-
 from app.integrations.pr_body import build_pr_body, build_pr_title
-
 
 # ── build_pr_title ─────────────────────────────────────────────────────────────
 

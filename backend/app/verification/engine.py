@@ -20,6 +20,7 @@ AGENTS.md constraints enforced:
 """
 
 import logging
+import tempfile
 from pathlib import Path
 
 from sqlalchemy import select
@@ -31,9 +32,11 @@ from app.db.models import (
     Experiment,
     Hypothesis,
     HypothesisStatus,
+    Patch,
     TestEvidence,
 )
 from app.schemas.bug_context import BugContext
+from app.tools.executor import run_command
 from app.tools.git_tools import apply_patch
 from app.tools.test_runner import run_test
 from app.verification.flaky_runner import FlakyRunResult, run_flaky
@@ -136,9 +139,7 @@ class VerificationEngine:
                 )
                 return await self._save_status(hypothesis_id, HypothesisStatus.BLOCKED)
             # Patch failed but under the cap: treat as REJECTED for this run
-            logger.info(
-                "Hypothesis %s: patch did not apply cleanly — REJECTED", hypothesis_id
-            )
+            logger.info("Hypothesis %s: patch did not apply cleanly — REJECTED", hypothesis_id)
             return await self._save_status(hypothesis_id, HypothesisStatus.REJECTED)
 
         # ── Step 5: Post-fix run (MUST PASS) ──────────────────────────────────
@@ -180,8 +181,80 @@ class VerificationEngine:
             return await self._save_status(hypothesis_id, HypothesisStatus.REJECTED)
 
         # ── Step 7: All conditions met — VERIFIED ─────────────────────────────
+        await self._save_verified_patch(hypothesis_id, worktree_path, test_path, hyp.candidate_fix)
         logger.info("Hypothesis %s: VERIFIED ✓", hypothesis_id)
         return await self._save_status(hypothesis_id, HypothesisStatus.VERIFIED)
+
+    async def _save_verified_patch(
+        self, hypothesis_id: str, worktree_path: Path, test_path: str, candidate_fix: str
+    ) -> None:
+        """Save a portable source-and-regression-test diff before worktree cleanup."""
+        changed_paths: set[str] = {test_path}
+        for line in candidate_fix.splitlines():
+            if line.startswith(("+++ b/", "--- a/")):
+                changed_paths.add(line[6:])
+        for relative in changed_paths:
+            path = (worktree_path / relative).resolve()
+            if path != worktree_path.resolve() and not path.is_relative_to(worktree_path.resolve()):
+                raise ValueError(f"Patch path escapes worktree: {relative}")
+
+        staged_before = await run_command(
+            ["git", "diff", "--cached", "--name-only"], cwd=worktree_path
+        )
+        if staged_before.exit_code != 0 or staged_before.stdout.strip():
+            raise RuntimeError("Worktree already contains staged changes")
+
+        add = await run_command(["git", "add", "--", *sorted(changed_paths)], cwd=worktree_path)
+        if add.exit_code != 0:
+            raise RuntimeError(f"Could not stage verified patch: {add.stderr[:200]}")
+        diff_result = await run_command(
+            ["git", "diff", "--cached", "--binary", "HEAD"], cwd=worktree_path
+        )
+        files_result = await run_command(
+            ["git", "diff", "--cached", "--name-only", "HEAD"], cwd=worktree_path
+        )
+        branch_result = await run_command(["git", "branch", "--show-current"], cwd=worktree_path)
+        if any(result.exit_code != 0 for result in (diff_result, files_result, branch_result)):
+            raise RuntimeError("Could not assemble verified patch")
+        diff = diff_result.stdout
+        files_changed = files_result.stdout.splitlines()
+        branch = branch_result.stdout.strip()
+        if not diff.strip() or not files_changed or not branch:
+            raise RuntimeError("Verified patch has no diff, files, or branch")
+        changed_result = await run_command(
+            ["git", "diff", "--name-only", "HEAD"], cwd=worktree_path
+        )
+        if changed_result.exit_code != 0 or set(changed_result.stdout.splitlines()) != set(
+            files_changed
+        ):
+            raise RuntimeError("Worktree contains changes outside the verified patch")
+
+        with tempfile.TemporaryDirectory(prefix="tracelab-patch-check-") as temp_dir:
+            clone = Path(temp_dir) / "base"
+            clone_result = await run_command(
+                ["git", "clone", "--quiet", "--local", str(worktree_path), str(clone)],
+                cwd=Path(temp_dir),
+            )
+            if clone_result.exit_code != 0:
+                raise RuntimeError("Could not clone base for patch validation")
+            patch_file = Path(temp_dir) / "verified.patch"
+            patch_file.write_text(diff, encoding="utf-8")
+            check = await run_command(["git", "apply", "--check", str(patch_file)], cwd=clone)
+            if check.exit_code != 0:
+                raise RuntimeError(f"Verified patch does not apply to base: {check.stderr[:200]}")
+
+        async with self._sf() as session:
+            result = await session.execute(
+                select(Patch).where(Patch.hypothesis_id == hypothesis_id).limit(1)
+            )
+            patch = result.scalar_one_or_none()
+            if patch is None:
+                patch = Patch(hypothesis_id=hypothesis_id)
+                session.add(patch)
+            patch.branch = branch
+            patch.diff = diff
+            patch.files_changed = files_changed
+            await session.commit()
 
     # ── private steps ─────────────────────────────────────────────────────────
 
@@ -198,9 +271,7 @@ class VerificationEngine:
         if not hyp.reproduction_plan:
             # No plan: run the full test suite and hope something fails
             result = await run_test(repo_path=worktree_path)
-            await self._append_experiment(
-                hyp.id, result, "reproduce_full_suite"
-            )
+            await self._append_experiment(hyp.id, result, "reproduce_full_suite")
             return result.exit_code != 0
 
         any_failure = False
@@ -264,9 +335,7 @@ class VerificationEngine:
         Returns True if applied cleanly.
         """
         if not candidate_fix.strip():
-            logger.warning(
-                "Hypothesis %s: candidate_fix is empty — cannot apply", hypothesis_id
-            )
+            logger.warning("Hypothesis %s: candidate_fix is empty — cannot apply", hypothesis_id)
             await self._increment_patch_attempts(hypothesis_id)
             return False
 

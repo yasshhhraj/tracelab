@@ -10,6 +10,8 @@ Acceptance criteria:
     AC-PR-6  POST /pull-request on unknown id → 404
 """
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
@@ -208,9 +210,7 @@ async def test_pull_request_stores_pr_url_in_patch(
     # Verify it was persisted on the Patch row
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:
-        result = await session.execute(
-            select(PatchORM).where(PatchORM.hypothesis_id == hyp_id)
-        )
+        result = await session.execute(select(PatchORM).where(PatchORM.hypothesis_id == hyp_id))
         patch_row = result.scalar_one()
     assert patch_row.pr_url == returned_pr_url
 
@@ -229,9 +229,7 @@ async def test_pull_request_unknown_investigation_returns_404(client_with_db: As
 
 
 @pytest.mark.asyncio
-async def test_second_approve_returns_409(
-    client_with_db: AsyncClient, db_engine: AsyncEngine
-):
+async def test_second_approve_returns_409(client_with_db: AsyncClient, db_engine: AsyncEngine):
     """Approving an already-APPROVED investigation returns 409 (not WAITING_FOR_REVIEW)."""
     inv_id = await _make_investigation(db_engine, InvestigationStatus.WAITING_FOR_REVIEW)
     await client_with_db.post(f"/api/investigations/{inv_id}/approve")
@@ -242,8 +240,6 @@ async def test_second_approve_returns_409(
 # ══════════════════════════════════════════════════════════════════════════════
 # CP-12 tests — real GitHub integration path
 # ══════════════════════════════════════════════════════════════════════════════
-
-from unittest.mock import AsyncMock, patch
 
 
 @pytest.fixture(autouse=True)
@@ -355,18 +351,14 @@ async def test_resolve_local_repository_from_github_origin(tmp_path, origin):
     with patch("app.routers.investigations.run_command", new_callable=AsyncMock) as git:
         git.return_value = SimpleNamespace(exit_code=0, timed_out=False, stdout=origin)
         assert await _resolve_github_repo(str(tmp_path)) == ("org", "repo")
-        git.assert_awaited_once_with(
-            ["git", "remote", "get-url", "origin"], cwd=tmp_path
-        )
+        git.assert_awaited_once_with(["git", "remote", "get-url", "origin"], cwd=tmp_path)
 
 
 # ── CP-12 route integration tests ─────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_pull_request_calls_github_when_token_set(
-    client_with_db: AsyncClient, db_engine
-):
+async def test_pull_request_calls_github_when_token_set(client_with_db: AsyncClient, db_engine):
     """With GITHUB_TOKEN configured, GitHubClient is called and a real URL is returned."""
     inv_id, _, _ = await _seed_approved_investigation_with_patch(db_engine)
     expected_pr_url = "https://github.com/org/repo/pull/99"
@@ -389,9 +381,7 @@ async def test_pull_request_calls_github_when_token_set(
 
 
 @pytest.mark.asyncio
-async def test_pull_request_github_failure_returns_503(
-    client_with_db: AsyncClient, db_engine
-):
+async def test_pull_request_github_failure_returns_503(client_with_db: AsyncClient, db_engine):
     """GitHubClientError during PR creation → 503."""
     from app.integrations.github_client import GitHubClientError as _GHErr
 
@@ -411,9 +401,7 @@ async def test_pull_request_github_failure_returns_503(
 
 
 @pytest.mark.asyncio
-async def test_pull_request_github_auth_failure_returns_503(
-    client_with_db: AsyncClient, db_engine
-):
+async def test_pull_request_github_auth_failure_returns_503(client_with_db: AsyncClient, db_engine):
     """GitHubAuthError → 503."""
     from app.integrations.github_client import GitHubAuthError as _GHAuthErr
 
@@ -424,9 +412,7 @@ async def test_pull_request_github_auth_failure_returns_503(
         patch("app.routers.investigations.GitHubClient") as MockGH,
     ):
         mock_instance = MockGH.return_value
-        mock_instance.clone_apply_and_push = AsyncMock(
-            side_effect=_GHAuthErr("auth failed")
-        )
+        mock_instance.clone_apply_and_push = AsyncMock(side_effect=_GHAuthErr("auth failed"))
 
         response = await client_with_db.post(f"/api/investigations/{inv_id}/pull-request")
 
@@ -434,9 +420,7 @@ async def test_pull_request_github_auth_failure_returns_503(
 
 
 @pytest.mark.asyncio
-async def test_pull_request_idempotent_with_real_url(
-    client_with_db: AsyncClient, db_engine
-):
+async def test_pull_request_idempotent_with_real_url(client_with_db: AsyncClient, db_engine):
     """Second call with a real cached pr_url returns it without re-calling GitHub."""
     real_url = "https://github.com/org/repo/pull/77"
     inv_id, _, _ = await _seed_approved_investigation_with_patch(db_engine)
@@ -466,9 +450,7 @@ async def test_pull_request_idempotent_with_real_url(
 
 
 @pytest.mark.asyncio
-async def test_pull_request_token_not_in_response_body(
-    client_with_db: AsyncClient, db_engine
-):
+async def test_pull_request_token_not_in_response_body(client_with_db: AsyncClient, db_engine):
     """The GitHub token must not appear anywhere in the JSON response."""
     secret_token = "ghp_VERY_SECRET_TOKEN_MUST_NOT_APPEAR"
     inv_id, _, _ = await _seed_approved_investigation_with_patch(db_engine)
@@ -480,9 +462,7 @@ async def test_pull_request_token_not_in_response_body(
     ):
         mock_instance = MockGH.return_value
         mock_instance.clone_apply_and_push = AsyncMock(return_value="sha123")
-        mock_instance.create_draft_pr = AsyncMock(
-            return_value="https://github.com/org/repo/pull/1"
-        )
+        mock_instance.create_draft_pr = AsyncMock(return_value="https://github.com/org/repo/pull/1")
 
         response = await client_with_db.post(f"/api/investigations/{inv_id}/pull-request")
 

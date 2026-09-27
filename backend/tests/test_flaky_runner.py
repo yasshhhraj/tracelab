@@ -79,6 +79,7 @@ async def test_flaky_runner_exact_min_runs_not_clamped(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_flaky_runner_all_pass_returns_zero_failures(tmp_path: Path):
     """All runs pass → failures == 0, failure_rate == 0.0."""
+
     async def fake_run_test(**kwargs):
         return _make_result(0)
 
@@ -93,6 +94,7 @@ async def test_flaky_runner_all_pass_returns_zero_failures(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_flaky_runner_all_fail_returns_n_failures(tmp_path: Path):
     """All runs fail → failures == n_runs."""
+
     async def fake_run_test(**kwargs):
         return _make_result(1)
 
@@ -150,6 +152,7 @@ async def test_flaky_runner_collects_output_samples(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_flaky_runner_result_model_fields(tmp_path: Path):
     """FlakyRunResult has the expected fields."""
+
     async def fake_run_test(**kwargs):
         return _make_result(0)
 

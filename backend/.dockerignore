@@ -1,0 +1,13 @@
+.env
+.env.*
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+output/
+tests/
+tracelab.db
+tracelab_dev.db

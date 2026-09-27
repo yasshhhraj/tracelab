@@ -29,8 +29,8 @@ class Settings(BaseSettings):
     # External integrations — secrets, env-only
     jira_base_url: str = ""
     jira_api_token: str = ""
-    jira_user_email: str = ""           # required for Jira Cloud Basic auth
-    jira_webhook_secret: str = ""       # optional HMAC-SHA256 secret for webhook validation
+    jira_user_email: str = ""  # required for Jira Cloud Basic auth
+    jira_webhook_secret: str = ""  # optional HMAC-SHA256 secret for webhook validation
     github_token: str = ""
     github_api_url: str = "https://api.github.com"  # override for GitHub Enterprise
 

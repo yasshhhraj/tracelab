@@ -42,6 +42,7 @@ next-env.d.ts
 # Project-specific
 # bob_sessions/
 backend/.python-version
+backend/output/cp13-benchmark.json
 
 .codex-build/
 .codex-finalizer/

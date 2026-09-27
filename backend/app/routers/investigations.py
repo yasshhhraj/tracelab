@@ -38,6 +38,7 @@ from app.integrations.github_client import (
 )
 from app.integrations.pr_body import build_pr_body, build_pr_title
 from app.orchestrator import run_investigation
+from app.repository_access import permitted_repository
 from app.schemas.bug_context import BugContext
 from app.schemas.investigation import (
     AgentEventResponse,
@@ -85,9 +86,7 @@ def _parse_github_repo(repository: str) -> tuple[str, str]:
 
     parts = cleaned.split("/")
     if len(parts) != 2 or not parts[0] or not parts[1]:
-        raise ValueError(
-            f"Cannot parse GitHub owner/repo from repository string: '{repository}'"
-        )
+        raise ValueError(f"Cannot parse GitHub owner/repo from repository string: '{repository}'")
     return parts[0], parts[1]
 
 
@@ -166,6 +165,7 @@ async def _create_github_pr(
     )
     return pr_url
 
+
 # ── valid transitions for approve / reject ────────────────────────────────────
 _APPROVABLE_STATUSES = {InvestigationStatus.WAITING_FOR_REVIEW}
 _REJECTABLE_STATUSES = {InvestigationStatus.WAITING_FOR_REVIEW}
@@ -190,6 +190,7 @@ async def create_investigation(
     repository = body.repository or settings.target_repository
     if not repository:
         raise HTTPException(status_code=422, detail="Repository is required")
+    repository = permitted_repository(repository)
 
     bug_context = BugContext(
         issue_id=body.jira_issue_id,
@@ -443,6 +444,7 @@ async def create_pull_request(
     # ── post Jira PR-link comment (CP-11 + CP-12, fire-and-forget) ────────────
     with contextlib.suppress(Exception):
         from app.integrations.jira_client import JiraClient
+
         await JiraClient().add_comment(
             inv.external_issue_id,
             f"Draft PR created: {pr_url}",

@@ -1,4 +1,14 @@
-.PHONY: dev test lint fmt build up down migrate clean
+.PHONY: dev test lint fmt build up down migrate clean demo benchmark
+
+BACKEND_PYTHON := $(if $(wildcard backend/.venv/bin/python),.venv/bin/python,python)
+BACKEND_PYTEST := $(if $(wildcard backend/.venv/bin/pytest),.venv/bin/pytest,pytest)
+BACKEND_RUFF := $(if $(wildcard backend/.venv/bin/ruff),.venv/bin/ruff,ruff)
+
+demo:
+	cd backend && $(BACKEND_PYTHON) ../scripts/run_demo.py
+
+benchmark:
+	cd backend && $(BACKEND_PYTHON) ../scripts/run_benchmark.py
 
 # ── Local development (SQLite, hot-reload) ────────────────────────────────────
 dev:
@@ -6,14 +16,14 @@ dev:
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 test:
-	cd backend && pytest --cov=app --cov-report=term-missing -q
+	cd backend && $(BACKEND_PYTEST) --cov=app --cov-report=term-missing -q
 
 # ── Lint ──────────────────────────────────────────────────────────────────────
 lint:
-	cd backend && ruff check . && ruff format --check .
+	cd backend && $(BACKEND_RUFF) check . && $(BACKEND_RUFF) format --check .
 
 fmt:
-	cd backend && ruff format .
+	cd backend && $(BACKEND_RUFF) format .
 
 # ── Docker ────────────────────────────────────────────────────────────────────
 build:

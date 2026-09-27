@@ -3,9 +3,10 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /build
 COPY pyproject.toml .
+COPY app/ ./app/
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir hatchling && \
-    pip install --no-cache-dir .
+    pip install --no-cache-dir '.[dev]'
 
 # ── Stage 2: runtime ─────────────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
@@ -19,6 +20,8 @@ WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.12 /usr/local/lib/python3.12
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY app/ ./app/
+COPY alembic.ini ./alembic.ini
+COPY alembic/ ./alembic/
 
 # Never bake secrets into the image
 ENV PYTHONDONTWRITEBYTECODE=1 \

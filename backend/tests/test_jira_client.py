@@ -21,7 +21,6 @@ from app.integrations.jira_client import (
     _plain_text_to_adf,
 )
 
-
 # ── ADF helpers ────────────────────────────────────────────────────────────────
 
 
@@ -46,7 +45,9 @@ def _make_jira_response(issue_key: str = "PVS-421") -> dict[str, Any]:
         "key": issue_key,
         "fields": {
             "summary": "Duplicate rows on concurrent requests",
-            "description": _make_adf_doc("Two rows are created when two requests arrive simultaneously."),
+            "description": _make_adf_doc(
+                "Two rows are created when two requests arrive simultaneously."
+            ),
             "issuetype": {"name": "Bug"},
             "priority": {"name": "High"},
             "status": {"name": "In Progress"},
@@ -56,9 +57,7 @@ def _make_jira_response(issue_key: str = "PVS-421") -> dict[str, Any]:
             "assignee": {"displayName": "Bob"},
             "comment": {
                 "comments": [
-                    {
-                        "body": _make_adf_doc("Reproduced in staging with two concurrent curl calls.")
-                    }
+                    {"body": _make_adf_doc("Reproduced in staging with two concurrent curl calls.")}
                 ]
             },
             "attachment": [{"filename": "screen.png"}],
@@ -225,9 +224,11 @@ async def test_get_issue_404():
     )
     mock_client = _mock_httpx_get({}, status_code=404)
 
-    with patch("app.integrations.jira_client.httpx.AsyncClient", return_value=mock_client):
-        with pytest.raises(JiraNotFoundError):
-            await client.get_issue("MISSING-1")
+    with (
+        patch("app.integrations.jira_client.httpx.AsyncClient", return_value=mock_client),
+        pytest.raises(JiraNotFoundError),
+    ):
+        await client.get_issue("MISSING-1")
 
 
 @pytest.mark.asyncio
@@ -239,9 +240,11 @@ async def test_get_issue_401():
     )
     mock_client = _mock_httpx_get({}, status_code=401)
 
-    with patch("app.integrations.jira_client.httpx.AsyncClient", return_value=mock_client):
-        with pytest.raises(JiraAuthError):
-            await client.get_issue("PVS-421")
+    with (
+        patch("app.integrations.jira_client.httpx.AsyncClient", return_value=mock_client),
+        pytest.raises(JiraAuthError),
+    ):
+        await client.get_issue("PVS-421")
 
 
 @pytest.mark.asyncio
@@ -253,9 +256,11 @@ async def test_get_issue_500():
     )
     mock_client = _mock_httpx_get({}, status_code=500)
 
-    with patch("app.integrations.jira_client.httpx.AsyncClient", return_value=mock_client):
-        with pytest.raises(JiraClientError):
-            await client.get_issue("PVS-421")
+    with (
+        patch("app.integrations.jira_client.httpx.AsyncClient", return_value=mock_client),
+        pytest.raises(JiraClientError),
+    ):
+        await client.get_issue("PVS-421")
 
 
 @pytest.mark.asyncio
@@ -274,12 +279,11 @@ async def test_add_comment_ok():
     mock_client.post.assert_called_once()
     call_kwargs = mock_client.post.call_args
     # Verify ADF structure in payload
-    payload = call_kwargs.kwargs.get("json") or call_kwargs.args[1] if len(call_kwargs.args) > 1 else call_kwargs.kwargs.get("json", {})
-    if "json" in call_kwargs.kwargs:
-        payload = call_kwargs.kwargs["json"]
+    payload = call_kwargs.kwargs["json"]
     assert "body" in payload
     # Token must NOT appear in the comment payload
     import json as _json
+
     payload_str = _json.dumps(payload)
     assert "supersecret" not in payload_str
 
@@ -294,9 +298,11 @@ async def test_add_comment_error():
     )
     mock_client = _mock_httpx_post(status_code=400)
 
-    with patch("app.integrations.jira_client.httpx.AsyncClient", return_value=mock_client):
-        with pytest.raises(JiraClientError):
-            await client.add_comment("PVS-421", "test comment")
+    with (
+        patch("app.integrations.jira_client.httpx.AsyncClient", return_value=mock_client),
+        pytest.raises(JiraClientError),
+    ):
+        await client.add_comment("PVS-421", "test comment")
 
 
 def test_token_not_in_log(caplog):
@@ -368,6 +374,8 @@ async def test_transition_status_not_found():
     mock_client.__aexit__ = AsyncMock(return_value=False)
     mock_client.get = AsyncMock(return_value=transitions_response)
 
-    with patch("app.integrations.jira_client.httpx.AsyncClient", return_value=mock_client):
-        with pytest.raises(JiraTransitionNotFoundError):
-            await client.transition_status("PVS-421", "Nonexistent Status")
+    with (
+        patch("app.integrations.jira_client.httpx.AsyncClient", return_value=mock_client),
+        pytest.raises(JiraTransitionNotFoundError),
+    ):
+        await client.transition_status("PVS-421", "Nonexistent Status")

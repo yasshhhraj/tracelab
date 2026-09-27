@@ -268,9 +268,7 @@ async def test_list_hypotheses_for_unknown_investigation_returns_404(
 
 
 @pytest.mark.asyncio
-async def test_approve_requires_waiting_for_review_status(
-    client_with_db: AsyncClient, db_engine
-):
+async def test_approve_requires_waiting_for_review_status(client_with_db: AsyncClient, db_engine):
     """approve on a CREATED investigation returns 409 (not 501)."""
     inv_id = await _seed_investigation(db_engine)
     response = await client_with_db.post(f"/api/investigations/{inv_id}/approve")
@@ -278,9 +276,7 @@ async def test_approve_requires_waiting_for_review_status(
 
 
 @pytest.mark.asyncio
-async def test_reject_requires_waiting_for_review_status(
-    client_with_db: AsyncClient, db_engine
-):
+async def test_reject_requires_waiting_for_review_status(client_with_db: AsyncClient, db_engine):
     """reject on a CREATED investigation returns 409 (not 501)."""
     inv_id = await _seed_investigation(db_engine)
     response = await client_with_db.post(f"/api/investigations/{inv_id}/reject")

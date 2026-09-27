@@ -1,0 +1,39 @@
+--- a/review_repository.py
++++ b/review_repository.py
+@@ -1,4 +1,4 @@
+-"""A deliberately racy SQLite repository used by the CP-13 demo."""
++"""A SQLite repository with a database-enforced idempotency key."""
+ 
+ import sqlite3
+ from pathlib import Path
+@@ -10,7 +10,7 @@
+         with self._connect() as connection:
+             connection.execute(
+                 "CREATE TABLE IF NOT EXISTS review_runs ("
+-                "id INTEGER PRIMARY KEY, input_hash TEXT NOT NULL, payload TEXT NOT NULL)"
++                "id INTEGER PRIMARY KEY, input_hash TEXT NOT NULL UNIQUE, payload TEXT NOT NULL)"
+             )
+ 
+     def _connect(self) -> sqlite3.Connection:
+@@ -25,12 +25,15 @@
+         return row[0] if row else None
+ 
+     def insert(self, input_hash: str, payload: str) -> int:
+-        with self._connect() as connection:
+-            cursor = connection.execute(
+-                "INSERT INTO review_runs (input_hash, payload) VALUES (?, ?)",
+-                (input_hash, payload),
+-            )
+-            return cursor.lastrowid
++        try:
++            with self._connect() as connection:
++                cursor = connection.execute(
++                    "INSERT INTO review_runs (input_hash, payload) VALUES (?, ?)",
++                    (input_hash, payload),
++                )
++                return cursor.lastrowid
++        except sqlite3.IntegrityError:
++            return self.find_by_hash(input_hash)
+ 
+     def count_by_hash(self, input_hash: str) -> int:
+         with self._connect() as connection:

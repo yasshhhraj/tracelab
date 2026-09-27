@@ -1,0 +1,253 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: TraceLab domain-free staging core (private RDS and SSM-only EC2 access)
+
+Parameters:
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+  InstanceType:
+    Type: String
+    Default: t3.medium
+    AllowedValues: [t3.medium, t3a.medium]
+  DBInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+    AllowedValues: [db.t4g.micro, db.t4g.small]
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - {Key: Name, Value: tracelab-mvp-vpc}
+        - {Key: Project, Value: TraceLab}
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - {Key: Name, Value: tracelab-mvp-igw}
+        - {Key: Project, Value: TraceLab}
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: 10.42.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - {Key: Name, Value: tracelab-mvp-public-a}
+        - {Key: Project, Value: TraceLab}
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: 10.42.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - {Key: Name, Value: tracelab-mvp-public-b}
+        - {Key: Project, Value: TraceLab}
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: 10.42.11.0/24
+      Tags:
+        - {Key: Name, Value: tracelab-mvp-private-a}
+        - {Key: Project, Value: TraceLab}
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: 10.42.12.0/24
+      Tags:
+        - {Key: Name, Value: tracelab-mvp-private-b}
+        - {Key: Project, Value: TraceLab}
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - {Key: Name, Value: tracelab-mvp-public-routes}
+        - {Key: Project, Value: TraceLab}
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetAAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetA
+
+  PublicSubnetBAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetB
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: TraceLab EC2 outbound only; no inbound app or SSH ports
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - {Key: Name, Value: tracelab-mvp-app-sg}
+        - {Key: Project, Value: TraceLab}
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: TraceLab RDS PostgreSQL from app security group only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+      Tags:
+        - {Key: Name, Value: tracelab-mvp-db-sg}
+        - {Key: Project, Value: TraceLab}
+
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: TraceLab private database subnets
+      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+      Tags:
+        - {Key: Project, Value: TraceLab}
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: tracelab-mvp-db
+      Engine: postgres
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: '20'
+      StorageType: gp3
+      StorageEncrypted: true
+      DBName: tracelab
+      MasterUsername: tracelab_admin
+      ManageMasterUserPassword: true
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      VPCSecurityGroups: [!Ref DatabaseSecurityGroup]
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 7
+      Tags:
+        - {Key: Name, Value: tracelab-mvp-db}
+        - {Key: Project, Value: TraceLab}
+
+  AppRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+      Policies:
+        - PolicyName: ReadTraceLabSecrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    'aws:ResourceTag/Project': TraceLab
+              - Effect: Allow
+                Action:
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:TagResource
+                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:tracelab-mvp-app-env-*'
+                Condition:
+                  StringEquals:
+                    'aws:RequestTag/Project': TraceLab
+      Tags:
+        - {Key: Project, Value: TraceLab}
+
+  AppInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref AppRole]
+
+  AppInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref AppInstanceProfile
+      SubnetId: !Ref PublicSubnetA
+      SecurityGroupIds: [!Ref AppSecurityGroup]
+      MetadataOptions:
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          dnf install -y docker git
+          systemctl enable --now docker
+          mkdir -p /srv/tracelab/repos /srv/tracelab/deploy
+          chown -R ec2-user:ec2-user /srv/tracelab
+      Tags:
+        - {Key: Name, Value: tracelab-mvp-app}
+        - {Key: Project, Value: TraceLab}
+
+Outputs:
+  VpcId:
+    Value: !Ref Vpc
+  AppInstanceId:
+    Value: !Ref AppInstance
+  AppSecurityGroupId:
+    Value: !Ref AppSecurityGroup
+  DatabaseEndpoint:
+    Value: !GetAtt Database.Endpoint.Address
+  DatabasePort:
+    Value: !GetAtt Database.Endpoint.Port
+  DatabaseMasterSecretArn:
+    Value: !GetAtt Database.MasterUserSecret.SecretArn
+  PublicSubnetAId:
+    Value: !Ref PublicSubnetA
+  PublicSubnetBId:
+    Value: !Ref PublicSubnetB

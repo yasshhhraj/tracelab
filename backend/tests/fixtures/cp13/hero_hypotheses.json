@@ -1,0 +1,20 @@
+{
+  "code_path": {
+    "summary": "The lookup and insert are not atomic across concurrent requests.",
+    "suspected_file": "review_repository.py",
+    "confidence": "low",
+    "expected_status": "VERIFIED"
+  },
+  "git_history": {
+    "summary": "A stale cached review payload causes duplicate inserts.",
+    "suspected_file": "review_service.py",
+    "confidence": "high",
+    "expected_status": "REJECTED"
+  },
+  "test_behavior": {
+    "summary": "Whitespace in input hashes causes duplicate inserts.",
+    "suspected_file": "review_service.py",
+    "confidence": "high",
+    "expected_status": "REJECTED"
+  }
+}

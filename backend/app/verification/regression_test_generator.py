@@ -155,9 +155,7 @@ class RegressionTestGenerator:
                         content=test_content,
                         overwrite=True,
                     )
-                    logger.info(
-                        "Regression test written to %s/%s", worktree_path, test_path
-                    )
+                    logger.info("Regression test written to %s/%s", worktree_path, test_path)
                     return test_path, test_content
 
             # Model replied with plain text — continue loop
@@ -259,9 +257,7 @@ class RegressionTestGenerator:
             "tool_choice": "auto",
         }
         # SECURITY: Do not log headers (would expose the API key).
-        logger.debug(
-            "RegressionTestGenerator POST %s/chat/completions", settings.llm_base_url
-        )
+        logger.debug("RegressionTestGenerator POST %s/chat/completions", settings.llm_base_url)
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 f"{settings.llm_base_url}/chat/completions",

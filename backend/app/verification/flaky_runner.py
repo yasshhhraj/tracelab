@@ -81,9 +81,7 @@ async def run_flaky(
                 if result.stderr:
                     sample_lines.append(result.stderr[-200:])
                 output_samples.append("\n".join(sample_lines).strip())
-        logger.debug(
-            "run_flaky run %d/%d: exit_code=%d", i + 1, effective_runs, result.exit_code
-        )
+        logger.debug("run_flaky run %d/%d: exit_code=%d", i + 1, effective_runs, result.exit_code)
 
     failure_rate = failures / effective_runs if effective_runs > 0 else 0.0
     logger.info(

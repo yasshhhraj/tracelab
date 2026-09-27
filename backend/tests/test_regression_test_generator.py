@@ -80,9 +80,7 @@ def bug_context() -> BugContext:
 
 
 @pytest.mark.asyncio
-async def test_generator_returns_test_path_and_content(
-    bug_context: BugContext, tmp_path: Path
-):
+async def test_generator_returns_test_path_and_content(bug_context: BugContext, tmp_path: Path):
     """generate() returns (str, str) with the expected path and content."""
     expected_content = "def test_regression():\n    assert True\n"
     expected_path = "tests/test_regression_abc12345.py"
@@ -135,9 +133,7 @@ async def test_generator_writes_file_to_worktree(bug_context: BugContext, tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_generator_emit_test_call_parsed_correctly(
-    bug_context: BugContext, tmp_path: Path
-):
+async def test_generator_emit_test_call_parsed_correctly(bug_context: BugContext, tmp_path: Path):
     """Correct test_file_path and test_content extracted from emit_test args."""
     path = "tests/test_regression_parse.py"
     content = "# regression\ndef test_x():\n    assert 1 == 1\n"
@@ -198,9 +194,7 @@ async def test_generator_api_key_not_in_prompt(bug_context: BugContext, tmp_path
     for messages in captured_calls:
         for msg in messages:
             content = msg.get("content") or ""
-            assert "sk-test-SECRET-KEY-12345" not in content, (
-                "API key leaked into message content"
-            )
+            assert "sk-test-SECRET-KEY-12345" not in content, "API key leaked into message content"
 
 
 @pytest.mark.asyncio
